@@ -13,6 +13,7 @@ from open_agent.trace import SpanKind, Trace, TraceManager
 from open_agent.routing.router import RoutingPipeline, RoutingDecision
 from open_agent.agent.react import ReActLoop
 from open_agent.agent.planner import PlanGenerator
+from open_agent.model import ProviderFactory
 from open_agent.memory.factory import MemoryFactory
 from open_agent.memory.working import WorkingMemory
 from open_agent.memory.episodic import EpisodicStore
@@ -62,10 +63,14 @@ class AgentRuntime(BaseComponent):
             fast_path_confidence=self.config.routing.fast_path_confidence,
         )
 
+        # Model provider
+        self.provider = ProviderFactory.create(self.config.model)
+
         # Agent core
         self.react_loop = ReActLoop(
             tool_registry=self.tool_registry,
             max_iterations=10,
+            provider=self.provider,
             prompt_builder=self.prompt_builder,
         )
         self.plan_generator = PlanGenerator()
@@ -97,6 +102,9 @@ class AgentRuntime(BaseComponent):
     async def on_start(self) -> None:
         """Initialize all subsystems."""
         await super().on_start()
+
+        # Provider
+        await self.provider.on_start()
 
         # Memory
         self._working_memory = self.memory_factory.create_working_memory()
@@ -157,7 +165,7 @@ class AgentRuntime(BaseComponent):
             await self._episodic_store.write_after_task({
                 "intent": routing_decision.intent.intent,
                 "steps_summary": f"Executed {len(trace.spans)} operations",
-                "result": response.output,
+                "result": response.answer,
                 "user_feedback": None,
             })
 
@@ -176,13 +184,24 @@ class AgentRuntime(BaseComponent):
         duration_ms = (time.time() - start_time) * 1000
 
         return AgentResponse(
-            output=response.output,
+            output=response.answer,
             trace_id=trace.trace_id,
             routing=routing_decision,
             quality_score=quality.score,
             anomalies=[{"type": a.alert_type, "message": a.message} for a in anomalies],
             duration_ms=duration_ms,
-            metadata={"matched_skills": [s["name"] for s in matched_skills]},
+            metadata={
+                "matched_skills": [s["name"] for s in matched_skills],
+                "total_steps": response.total_steps,
+                "steps": [
+                    {
+                        "thought": step.thought.content if step.thought else None,
+                        "action": f"{step.action.tool_name}({step.action.args})" if step.action else None,
+                        "observation": step.observation.content if step.observation else None,
+                    }
+                    for step in response.state.steps
+                ],
+            },
         )
 
     async def run_eval_scenario(self, scenario) -> dict[str, Any]:

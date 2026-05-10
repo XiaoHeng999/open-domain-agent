@@ -13,7 +13,7 @@ from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
-from open_agent.config import load_config
+from open_agent.config_loader import load_config
 
 app = typer.Typer(name="agent", help="Open-domain Agent Framework CLI")
 console = Console()
@@ -31,16 +31,44 @@ def run(
     workspace: str = typer.Option(".", "--workspace", "-w", help="Workspace directory"),
 ) -> None:
     """Execute a single task."""
+    from open_agent.runtime import AgentRuntime
+
     cfg = load_config(config, workspace=workspace)
     console.print(Panel(f"[bold]Task:[/] {task}", title="Open Agent"))
+    console.print(f"[dim]Config: {cfg.model.provider}/{cfg.model.name}[/dim]")
+    console.print(f"[dim]Workspace: {cfg.workspace}[/dim]\n")
 
-    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console) as progress:
-        progress.add_task("Processing...", total=None)
-        # Will be wired to Agent Runtime after it's implemented
-        console.print(f"[dim]Config loaded: {cfg.model.provider}/{cfg.model.name}[/dim]")
-        console.print(f"[dim]Workspace: {cfg.workspace}[/dim]")
+    runtime = AgentRuntime(config=cfg)
 
-    console.print("[green]Done.[/green]")
+    async def _run():
+        await runtime.on_start()
+        try:
+            return await runtime.run(task)
+        finally:
+            await runtime.on_stop()
+
+    try:
+        response = _run_async(_run())
+    except Exception as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(1)
+
+    # Display agent loop steps
+    for i, step_info in enumerate(response.metadata.get("steps", [])):
+        console.print(f"[bold cyan]Step {i + 1}:[/]")
+        if step_info.get("thought"):
+            console.print(f"  [yellow]Thought:[/] {step_info['thought']}")
+        if step_info.get("action"):
+            console.print(f"  [blue]Action:[/] {step_info['action']}")
+        if step_info.get("observation"):
+            console.print(f"  [green]Observation:[/] {step_info['observation']}")
+
+    console.print(f"\n[bold green]Answer:[/] {response.output}")
+    console.print(
+        f"[dim]Trace: {response.trace_id} | "
+        f"Steps: {response.metadata.get('total_steps', '?')} | "
+        f"Duration: {response.duration_ms:.0f}ms[/dim]"
+    )
 
 
 @app.command()

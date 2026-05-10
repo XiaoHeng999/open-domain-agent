@@ -1,0 +1,74 @@
+# Open Agent Configuration
+# ──────────────────────────────────────────────
+# Resolution priority (highest wins):
+#   CLI overrides  >  Environment variables  >  .env file  >  this file  >  Pydantic defaults
+#
+# Environment variables use the OPEN_AGENT_ prefix:
+#   OPEN_AGENT_MODEL_API_KEY, OPEN_AGENT_MODEL_BASE_URL, etc.
+# ──────────────────────────────────────────────
+
+model:
+  # LLM provider: openai | anthropic | deepseek | local
+  provider: deepseek
+
+  # Model name (provider-specific)
+  name: deepseek-chat
+
+  # Generation temperature (0.0 - 2.0)
+  temperature: 0.7
+
+  # Maximum tokens per response
+  max_tokens: 4096
+
+  # API key — DO NOT put here. Use .env or OPEN_AGENT_MODEL_API_KEY env var
+  # api_key: sk-xxxxx
+
+  # Custom API base URL (for proxies, compatible endpoints, etc.)
+  base_url: https://api.deepseek.com/v1
+
+memory:
+  working_memory_token_limit: 8000
+  compression_threshold: 0.8
+  keep_recent_turns: 3
+  episodic_store_path: .open_agent/episodic.json
+  user_profile_path: .open_agent/profile.json
+
+safety:
+  # strict | permissive | off
+  safety_level: strict
+  trusted_paths: []
+  sensitive_files:
+    - .env
+    - credentials.json
+    - "*.key"
+    - "*.pem"
+
+sandbox:
+  # daytona | docker | subprocess
+  backend: subprocess
+  auto_timeout: 300
+
+routing:
+  # rule | llm
+  complexity_method: rule
+  domains:
+    - coding
+    - search
+    - web
+    - general
+  fast_path_confidence: 0.9
+
+checkpoint:
+  enabled: true
+  interval: 1
+  # json | sqlite
+  storage_backend: json
+  storage_path: .open_agent/checkpoints
+
+trace:
+  enabled: true
+  store_traces: true
+  trace_dir: .open_agent/traces
+
+# Default workspace (overridden by --workspace / -w CLI flag)
+workspace: .
