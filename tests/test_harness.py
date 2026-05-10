@@ -164,6 +164,45 @@ class TestToolRegistry:
         assert removed == 2
         assert len(reg) == 1
 
+    def test_snapshot(self):
+        reg = ToolRegistry()
+        reg.register("t1", handler=lambda: None)
+        reg.register("t2", handler=lambda: None)
+        snap = reg.snapshot()
+        assert isinstance(snap, frozenset)
+        assert snap == frozenset(["t1", "t2"])
+
+    def test_restore(self):
+        reg = ToolRegistry()
+        reg.register("t1", handler=lambda: None)
+        reg.register("t2", handler=lambda: None)
+        snap = reg.snapshot()
+        reg.register("t3", handler=lambda: None)
+        assert len(reg) == 3
+        reg.restore(snap)
+        assert len(reg) == 2
+        assert reg.has("t1")
+        assert reg.has("t2")
+        assert not reg.has("t3")
+
+    def test_filter_by_tags(self):
+        reg = ToolRegistry()
+        reg.register("t1", handler=lambda: None, tags=["coding", "file"])
+        reg.register("t2", handler=lambda: None, tags=["web"])
+        reg.register("t3", handler=lambda: None, tags=["coding"])
+        result = reg.filter_by_tags(["coding"])
+        names = [t.name for t in result]
+        assert "t1" in names
+        assert "t3" in names
+        assert "t2" not in names
+
+    def test_filter_by_tags_multiple(self):
+        reg = ToolRegistry()
+        reg.register("t1", handler=lambda: None, tags=["coding"])
+        reg.register("t2", handler=lambda: None, tags=["web"])
+        result = reg.filter_by_tags(["coding", "web"])
+        assert len(result) == 2
+
 
 # --- Trace tests ---
 

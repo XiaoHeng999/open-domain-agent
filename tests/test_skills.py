@@ -60,8 +60,9 @@ Body.
         assert meta is None
         assert "name" in error
 
-    def test_missing_domain(self, tmp_path):
-        skill_file = tmp_path / "bad2.md"
+    def test_missing_domain_defaults_to_general(self, tmp_path):
+        """domain is optional — defaults to 'general'."""
+        skill_file = tmp_path / "no-domain.md"
         skill_file.write_text("""---
 name: test
 ---
@@ -69,8 +70,8 @@ name: test
 Body.
 """)
         meta, error = parse_skill_file(skill_file)
-        assert meta is None
-        assert "domain" in error
+        assert meta is not None
+        assert meta.domain == "general"
 
     def test_missing_file(self):
         meta, error = parse_skill_file("/nonexistent/file.md")
@@ -183,10 +184,11 @@ class TestBuiltinSkills:
     def test_scan_builtin(self):
         reg = SkillRegistry()
         count = scan_builtin_skills(reg)
-        assert count >= 3  # code-review, search-analyze, web-browse
-        assert reg.has("code-review")
-        assert reg.has("search-analyze")
-        assert reg.has("web-browse")
+        assert count >= 4  # skill-creator, summarize, weather, github
+        assert reg.has("skill-creator")
+        assert reg.has("summarize")
+        assert reg.has("weather")
+        assert reg.has("github")
 
     def test_scan_workspace(self, tmp_path):
         skills_dir = tmp_path / ".skills"

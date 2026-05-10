@@ -6,7 +6,12 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from open_agent.skills.parser import Skill, SkillMeta, parse_skill_file
+from open_agent.skills.parser import (
+    Skill,
+    SkillMeta,
+    parse_skill_directory,
+    parse_skill_file,
+)
 
 logger = logging.getLogger("open_agent")
 
@@ -20,7 +25,12 @@ class SkillRegistry:
     def __init__(self) -> None:
         self._skills: dict[str, Skill] = {}
 
-    def register(self, name: str, meta: SkillMeta, file_path: str | None = None) -> Skill:
+    def register(
+        self,
+        name: str,
+        meta: SkillMeta,
+        file_path: str | None = None,
+    ) -> Skill:
         """Register a skill. Only stores metadata; content loaded lazily."""
         if name in self._skills:
             raise ValueError(f"Skill already registered: {name}")
@@ -87,11 +97,13 @@ class SkillRegistry:
 
 
 def scan_builtin_skills(registry: SkillRegistry) -> int:
-    """Scan built-in skills directory and register them. Returns count registered."""
+    """Scan built-in skills directory for single-file and directory skills. Returns count registered."""
     if not _BUILTIN_SKILLS_DIR.exists():
         return 0
 
     count = 0
+
+    # 1. Single-file skills (*.md at root level, not inside subdirectories)
     for skill_file in _BUILTIN_SKILLS_DIR.glob("*.md"):
         meta, error = parse_skill_file(skill_file)
         if error:
@@ -102,6 +114,29 @@ def scan_builtin_skills(registry: SkillRegistry) -> int:
             count += 1
         except ValueError:
             logger.debug(f"Built-in skill already registered: {meta.name}")
+
+    # 2. Directory skills (subdirectories containing SKILL.md)
+    for skill_dir in _BUILTIN_SKILLS_DIR.iterdir():
+        if not skill_dir.is_dir():
+            continue
+        if skill_dir.name.startswith("_") or skill_dir.name.startswith("."):
+            continue
+
+        meta, error, md_path = parse_skill_directory(skill_dir)
+        if error:
+            logger.warning(f"Skipping built-in directory skill {skill_dir}: {error}")
+            continue
+
+        try:
+            registry.register(
+                meta.name,
+                meta,
+                str(md_path) if md_path else None,
+            )
+            count += 1
+        except ValueError:
+            logger.debug(f"Built-in skill already registered: {meta.name}")
+
     return count
 
 
@@ -112,6 +147,8 @@ def scan_workspace_skills(registry: SkillRegistry, workspace: str | Path) -> int
         return 0
 
     count = 0
+
+    # Single-file skills
     for skill_file in skills_dir.glob("*.md"):
         meta, error = parse_skill_file(skill_file)
         if error:
@@ -122,4 +159,27 @@ def scan_workspace_skills(registry: SkillRegistry, workspace: str | Path) -> int
             count += 1
         except ValueError:
             logger.debug(f"Workspace skill already registered: {meta.name}")
+
+    # Directory skills
+    for skill_dir in skills_dir.iterdir():
+        if not skill_dir.is_dir():
+            continue
+        if skill_dir.name.startswith("_") or skill_dir.name.startswith("."):
+            continue
+
+        meta, error, md_path = parse_skill_directory(skill_dir)
+        if error:
+            logger.warning(f"Skipping workspace directory skill {skill_dir}: {error}")
+            continue
+
+        try:
+            registry.register(
+                meta.name,
+                meta,
+                str(md_path) if md_path else None,
+            )
+            count += 1
+        except ValueError:
+            logger.debug(f"Workspace skill already registered: {meta.name}")
+
     return count

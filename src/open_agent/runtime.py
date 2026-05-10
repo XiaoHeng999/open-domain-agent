@@ -23,6 +23,7 @@ from open_agent.safety import SafetyManager
 from open_agent.sandbox.factory import SandboxFactory
 from open_agent.monitoring.collector import AnomalyDetector, QualityScorer, FeedbackLoop, TraceCollector
 from open_agent.checkpoint.manager import CheckpointManager
+from open_agent.prompt.builder import PromptBuilder
 
 
 @dataclass
@@ -49,6 +50,12 @@ class AgentRuntime(BaseComponent):
         self.tool_registry = ToolRegistry()
         self.skill_registry = SkillRegistry()
 
+        # Prompt pipeline
+        self.prompt_builder = PromptBuilder(
+            tool_registry=self.tool_registry,
+            workspace=self.config.workspace,
+        )
+
         # Routing
         self.routing_pipeline = RoutingPipeline(
             complexity_method=self.config.routing.complexity_method,
@@ -56,7 +63,11 @@ class AgentRuntime(BaseComponent):
         )
 
         # Agent core
-        self.react_loop = ReActLoop(tool_registry=self.tool_registry, max_iterations=10)
+        self.react_loop = ReActLoop(
+            tool_registry=self.tool_registry,
+            max_iterations=10,
+            prompt_builder=self.prompt_builder,
+        )
         self.plan_generator = PlanGenerator()
 
         # Memory
@@ -126,6 +137,9 @@ class AgentRuntime(BaseComponent):
         matched_skills = self.skill_matcher.get_skills_for_prompt(
             routing_decision.domain.domain, user_input
         )
+
+        # Inject matched skills into the prompt builder context
+        self.react_loop._matched_skills = matched_skills
 
         # Stage 3: ReAct execution
         response = await self.react_loop.run(

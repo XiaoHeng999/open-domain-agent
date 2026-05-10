@@ -1,4 +1,4 @@
-"""Skill file parser — Markdown + YAML frontmatter parsing."""
+"""Skill file parser — Markdown + YAML frontmatter parsing + directory skill support."""
 
 from __future__ import annotations
 
@@ -72,6 +72,27 @@ def parse_skill_file(file_path: str | Path) -> tuple[SkillMeta | None, str | Non
     return meta, None
 
 
+def parse_skill_directory(dir_path: str | Path) -> tuple[SkillMeta | None, str | None, Path | None]:
+    """Parse a skill directory. Returns (meta, error, skill_md_path).
+
+    The directory must contain a ``SKILL.md`` file with YAML frontmatter.
+    Only ``name`` and ``description`` are required in the frontmatter.
+    """
+    directory = Path(dir_path)
+    if not directory.is_dir():
+        return None, f"Not a directory: {dir_path}", None
+
+    skill_md = directory / "SKILL.md"
+    if not skill_md.exists():
+        return None, f"No SKILL.md in directory: {dir_path}", None
+
+    meta, error = parse_skill_file(skill_md)
+    if error:
+        return None, error, None
+
+    return meta, None, skill_md
+
+
 def _parse_frontmatter(text: str, source: str = "") -> tuple[SkillMeta | None, str | None]:
     """Parse YAML frontmatter from Markdown text."""
     match = re.match(r"^---\s*\n(.*?)\n---\s*\n", text, re.DOTALL)
@@ -88,11 +109,9 @@ def _parse_frontmatter(text: str, source: str = "") -> tuple[SkillMeta | None, s
     if not isinstance(data, dict):
         return None, f"Invalid frontmatter format in: {source}"
 
-    # Validate required fields
+    # Validate required fields — only 'name' is required
     if "name" not in data:
         return None, f"Missing required field 'name' in: {source}"
-    if "domain" not in data:
-        return None, f"Missing required field 'domain' in: {source}"
 
     # Handle trigger — can be string with | or list
     trigger = data.get("trigger", [])
@@ -104,7 +123,7 @@ def _parse_frontmatter(text: str, source: str = "") -> tuple[SkillMeta | None, s
     meta = SkillMeta(
         name=data["name"],
         description=data.get("description", ""),
-        domain=data["domain"],
+        domain=data.get("domain", "general"),
         tools=data.get("tools", []),
         trigger=trigger,
     )

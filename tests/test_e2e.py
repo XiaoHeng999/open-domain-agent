@@ -129,24 +129,24 @@ class TestErrorRecovery:
 
 class TestSkillsIntegration:
     def test_builtin_skills_loaded(self):
-        """Built-in skills loaded and matchable."""
+        """Built-in directory skills loaded and discoverable."""
         reg = SkillRegistry()
         count = scan_builtin_skills(reg)
-        assert count >= 3
-
-        matched = reg.match_skills("coding", "review my code")
-        assert len(matched) >= 1
-        assert any(s.meta.name == "code-review" for s in matched)
+        assert count >= 4  # skill-creator, summarize, weather, github
+        assert reg.has("skill-creator")
+        assert reg.has("summarize")
+        assert reg.has("weather")
+        assert reg.has("github")
 
     def test_skill_content_loading(self):
-        """Skills lazy-load content on match."""
+        """Skills lazy-load content on access."""
         reg = SkillRegistry()
         scan_builtin_skills(reg)
 
-        matched = reg.match_skills("search", "search and analyze data")
-        if matched:
-            assert matched[0]._content_loaded
-            assert matched[0].content  # has content
+        skill = reg.get("weather")
+        content = skill.load_content()
+        assert content  # has content
+        assert skill._content_loaded
 
 
 # --- 12.6: Security example ---

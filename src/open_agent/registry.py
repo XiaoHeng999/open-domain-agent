@@ -97,3 +97,19 @@ class ToolRegistry:
 
     def __contains__(self, name: str) -> bool:
         return name in self._tools
+
+    # ── Snapshot / Restore / Filter ──
+
+    def snapshot(self) -> frozenset[str]:
+        """Return a snapshot of current tool names."""
+        return frozenset(self._tools.keys())
+
+    def restore(self, snapshot: frozenset[str]) -> None:
+        """Restore registry to a previous snapshot, removing tools not in it."""
+        current = set(self._tools.keys())
+        for name in current - snapshot:
+            del self._tools[name]
+
+    def filter_by_tags(self, tags: list[str]) -> list[ToolEntry]:
+        """Return tools matching *any* of the given tags."""
+        return [t for t in self._tools.values() if any(tag in t.tags for tag in tags)]

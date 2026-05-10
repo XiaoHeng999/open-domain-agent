@@ -14,6 +14,18 @@ from open_agent.trace import Span, SpanKind, Trace
 
 logger = logging.getLogger("open_agent")
 
+# Lazy import to avoid circular dependency — resolved at runtime
+_PROMPT_BUILDER_TYPES: tuple = ()
+_PROMPT_BUILDER_CLS: type | None = None
+
+
+def _get_prompt_builder_type() -> type:
+    global _PROMPT_BUILDER_CLS
+    if _PROMPT_BUILDER_CLS is None:
+        from open_agent.prompt.builder import PromptBuilder
+        _PROMPT_BUILDER_CLS = PromptBuilder
+    return _PROMPT_BUILDER_CLS
+
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -126,10 +138,12 @@ class ReActLoop:
         tool_registry: ToolRegistry,
         max_iterations: int = 10,
         provider: Any = None,
+        prompt_builder: Any = None,
     ) -> None:
         self._registry = tool_registry
         self._max_iterations = max_iterations
         self._provider = provider
+        self._prompt_builder = prompt_builder
 
     # -- public API ----------------------------------------------------------
 
@@ -363,8 +377,16 @@ class ReActLoop:
         state: AgentState,
         prompt: str,
     ) -> list[dict[str, Any]]:
+        # System prompt: use PromptBuilder if available, else minimal default
+        if self._prompt_builder is not None:
+            system_content = self._prompt_builder.build(
+                context={"matched_skills": getattr(self, "_matched_skills", [])}
+            )
+        else:
+            system_content = "You are a helpful agent using the ReAct framework."
+
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": "You are a helpful agent using the ReAct framework."},
+            {"role": "system", "content": system_content},
             {"role": "user", "content": user_input},
         ]
         for step in state.steps:

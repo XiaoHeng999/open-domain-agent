@@ -14,15 +14,15 @@
 - 建立统一的 Prompt Assembly Pipeline，将 6 类上下文信息按语义段组装为完整 system prompt
 - 区分稳定段（启动时生成一次）和动态段（每轮刷新），减少重复 token 消耗
 - 为逻辑 agent 分层提供工具列表动态注入能力
-- 扩展 Skills 系统支持 Python handler + Markdown 定义双文件结构
-- 创建 5 个新技能包的文件结构骨架
+- 扩展 Skills 系统支持目录技能包（`SKILL.md` + `scripts/` / `references/` / `assets/`）
+- 创建 4 个新技能包（skill-creator、summarize、weather、github）
 
 **Non-Goals:**
 - 不实现 token 预算动态分配（后续优化）
 - 不实现提示词版本管理或 A/B 测试
 - 不修改 LLM provider 层的调用接口
 - 不实现 skills 的自动安装/卸载（仅手动放置文件）
-- 5 个新技能的 Markdown 指令内容暂由用户后续补充，本次只建骨架
+- 4 个新技能的 Markdown 指令内容暂由用户后续补充，本次只建骨架
 
 ## Decisions
 
@@ -121,32 +121,44 @@ DYNAMIC_ENV_TEMPLATE = "..."
 
 **备选**: 每个逻辑 agent 持有独立 ToolRegistry——注册/注销复杂，工具状态不一致风险高。
 
-### Decision 5: 技能包采用目录结构（skill_name/ 包含 .md + .py）
+### Decision 5: 目录技能包采用 SKILL.md + 资源子目录结构
 
-**选择**: 每个技能为一个目录，包含 `skill_name.md`（YAML frontmatter + 指令内容）和 `skill_name.py`（Python handler，导出 `register(registry: ToolRegistry)` 函数）。
+**选择**: 每个目录技能包含一个固定命名的 `SKILL.md` 文件（YAML frontmatter + 指令内容）和可选的资源子目录（`scripts/`、`references/`、`assets/`）。YAML frontmatter 仅需 `name` 和 `description` 两个字段。
 
 **目录结构**:
 ```
 src/open_agent/skills/builtin/
-  code-review.md          # 现有格式保持不变
+  code-review.md              # 现有单文件格式保持不变
   skill-creator/
-    skill-creator.md      # YAML frontmatter + 指令
-    skill-creator.py      # handler: register() 函数
+    SKILL.md                  # YAML frontmatter (name + description) + 指令
+    scripts/
+      init_skill.py           # 工具脚本（可选）
+      package_skill.py
+      quick_validate.py
   summarize/
-    summarize.md
-    summarize.py
+    SKILL.md                  # YAML frontmatter + 指令
   weather/
-    weather.md
-    weather.py
+    SKILL.md
   github/
-    github.md
-    github.py
-  wechat-mp-cn/
-    wechat-mp-cn.md
-    wechat-mp-cn.py
+    SKILL.md
 ```
 
-**理由**: 单文件技能（现有格式）和目录技能（新格式）共存，向后兼容。Python handler 让技能可以注册自己的工具到 ToolRegistry。
+**SKILL.md frontmatter 格式**:
+```yaml
+---
+name: skill-name
+description: 完整描述，包含技能用途和触发场景
+---
+```
+
+可选 frontmatter 字段：`homepage`、`metadata`（JSON blob）。
+
+**资源子目录说明**:
+- `scripts/` — 可执行脚本（Python/Bash），用于确定性操作
+- `references/` — 参考文档，按需加载到上下文
+- `assets/` — 输出用的模板/图片等文件，不加载到上下文
+
+**理由**: 单文件技能（现有格式）和目录技能（新格式）共存，向后兼容。`SKILL.md` 固定命名简化发现逻辑；资源子目录提供三级渐进加载（元数据 → SKILL.md 正文 → 参考资源），优化 token 使用。
 
 ### Decision 6: ReActLoop 通过 PromptBuilder 接收 system prompt
 
@@ -158,5 +170,5 @@ src/open_agent/skills/builtin/
 
 - **[Token 溢出风险]** → 6 段拼接可能超出上下文窗口。缓解：各段提供 `estimate_tokens()` 方法，Pipeline 在 build 时检查总量并截断低优先级段。
 - **[缓存一致性问题]** → 稳定段缓存可能与实际状态不同步。缓解：所有修改稳定段的操作必须调用 `builder.invalidate(segment_type)`。
-- **[技能 handler 安全性]** → Python handler 文件可执行任意代码。缓解：技能 handler 运行在沙箱环境中，受 SafetyManager 管控。
+- **[技能脚本安全性]** → `scripts/` 目录下的脚本可执行任意代码。缓解：技能脚本运行在沙箱环境中，受 SafetyManager 管控。
 - **[向后兼容]** → 现有单文件技能不受影响，目录技能为新增格式。缓解：`SkillParser` 自动检测文件/目录并选择对应解析路径。
