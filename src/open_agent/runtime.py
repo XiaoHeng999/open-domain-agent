@@ -121,8 +121,8 @@ class AgentRuntime(BaseComponent):
             from open_agent.checkpoint.manager import CheckpointManager
             storage = JSONStorage(self.config.checkpoint.storage_path)
             self.checkpoint_manager = CheckpointManager(
+                config=self.config.checkpoint,
                 storage=storage,
-                interval=self.config.checkpoint.interval,
             )
 
     async def on_stop(self) -> None:
@@ -162,12 +162,12 @@ class AgentRuntime(BaseComponent):
 
         # Stage 5: Memory updates
         if self._episodic_store:
-            await self._episodic_store.write_after_task({
-                "intent": routing_decision.intent.intent,
-                "steps_summary": f"Executed {len(trace.spans)} operations",
-                "result": response.answer,
-                "user_feedback": None,
-            })
+            await self._episodic_store.write_after_task(
+                intent=routing_decision.intent.intent,
+                steps_summary=f"Executed {len(trace.spans)} operations",
+                result=response.answer,
+                user_feedback="",
+            )
 
         # Feedback loop
         for alert in anomalies:

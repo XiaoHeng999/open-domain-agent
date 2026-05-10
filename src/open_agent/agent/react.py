@@ -378,12 +378,14 @@ class ReActLoop:
         prompt: str,
     ) -> list[dict[str, Any]]:
         # System prompt: use PromptBuilder if available, else minimal default
+        # Include JSON instruction so providers like DeepSeek accept response_format
         if self._prompt_builder is not None:
             system_content = self._prompt_builder.build(
                 context={"matched_skills": getattr(self, "_matched_skills", [])}
             )
         else:
             system_content = "You are a helpful agent using the ReAct framework."
+        system_content += "\nWhen asked to decide an action, respond with valid JSON."
 
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_content},

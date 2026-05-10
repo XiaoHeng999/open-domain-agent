@@ -65,6 +65,7 @@ class OpenAIProvider(ModelProvider):
         self, messages: list[dict[str, Any]], schema: dict[str, Any], **kwargs: Any
     ) -> dict[str, Any]:
         import json
+        import re
 
         response = await self._client.chat.completions.create(
             model=self.config.name,
@@ -72,7 +73,26 @@ class OpenAIProvider(ModelProvider):
             temperature=0.0,
             response_format={"type": "json_object"},
         )
-        return json.loads(response.choices[0].message.content)
+        text = response.choices[0].message.content or ""
+        # Strip markdown code fences if the model wraps output
+        text = re.sub(r"^```(?:json)?\s*", "", text.strip())
+        text = re.sub(r"\s*```$", "", text)
+        # Remove trailing commas before } or ] (common LLM mistake)
+        text = re.sub(r",\s*([}\]])", r"\1", text)
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            # Fallback: extract first {...} or [...] block
+            for start_ch, end_ch in [("{", "}"), ("[", "]")]:
+                start = text.find(start_ch)
+                if start != -1:
+                    end = text.rfind(end_ch)
+                    if end > start:
+                        try:
+                            return json.loads(text[start : end + 1])
+                        except json.JSONDecodeError:
+                            continue
+            raise
 
 
 class AnthropicProvider(ModelProvider):
