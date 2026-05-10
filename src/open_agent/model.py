@@ -1,0 +1,153 @@
+"""Model interface and ProviderFactory — config-driven LLM provider creation."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from open_agent.base import ModelProvider
+from open_agent.config import ModelConfig
+
+
+class ProviderFactory:
+    """Create LLM provider instances from config."""
+
+    _registry: dict[str, type[ModelProvider]] = {}
+
+    @classmethod
+    def register(cls, name: str, provider_cls: type[ModelProvider]) -> None:
+        cls._registry[name] = provider_cls
+
+    @classmethod
+    def create(cls, config: ModelConfig) -> ModelProvider:
+        provider_name = config.provider
+        if provider_name not in cls._registry:
+            raise ValueError(
+                f"Unknown provider: {provider_name}. "
+                f"Available: {list(cls._registry.keys())}"
+            )
+        return cls._registry[provider_name](config)
+
+    @classmethod
+    def available(cls) -> list[str]:
+        return list(cls._registry.keys())
+
+
+class OpenAIProvider(ModelProvider):
+    """OpenAI-compatible provider (also used for DeepSeek)."""
+
+    def __init__(self, config: ModelConfig) -> None:
+        self.config = config
+        self._client = None
+
+    async def on_start(self) -> None:
+        try:
+            from openai import AsyncOpenAI
+
+            kwargs: dict[str, Any] = {}
+            if self.config.api_key:
+                kwargs["api_key"] = self.config.api_key
+            if self.config.base_url:
+                kwargs["base_url"] = self.config.base_url
+            self._client = AsyncOpenAI(**kwargs)
+        except ImportError:
+            raise ImportError("Install openai: pip install openai")
+
+    async def complete(self, messages: list[dict[str, Any]], **kwargs: Any) -> str:
+        response = await self._client.chat.completions.create(
+            model=self.config.name,
+            messages=messages,
+            temperature=kwargs.get("temperature", self.config.temperature),
+            max_tokens=kwargs.get("max_tokens", self.config.max_tokens),
+        )
+        return response.choices[0].message.content
+
+    async def complete_structured(
+        self, messages: list[dict[str, Any]], schema: dict[str, Any], **kwargs: Any
+    ) -> dict[str, Any]:
+        import json
+
+        response = await self._client.chat.completions.create(
+            model=self.config.name,
+            messages=messages,
+            temperature=0.0,
+            response_format={"type": "json_object"},
+        )
+        return json.loads(response.choices[0].message.content)
+
+
+class AnthropicProvider(ModelProvider):
+    """Anthropic Claude provider."""
+
+    def __init__(self, config: ModelConfig) -> None:
+        self.config = config
+        self._client = None
+
+    async def on_start(self) -> None:
+        try:
+            from anthropic import AsyncAnthropic
+
+            kwargs: dict[str, Any] = {}
+            if self.config.api_key:
+                kwargs["api_key"] = self.config.api_key
+            self._client = AsyncAnthropic(**kwargs)
+        except ImportError:
+            raise ImportError("Install anthropic: pip install anthropic")
+
+    async def complete(self, messages: list[dict[str, Any]], **kwargs: Any) -> str:
+        system = None
+        user_messages = []
+        for m in messages:
+            if m["role"] == "system":
+                system = m["content"]
+            else:
+                user_messages.append(m)
+
+        response = await self._client.messages.create(
+            model=self.config.name,
+            max_tokens=kwargs.get("max_tokens", self.config.max_tokens),
+            system=system or "",
+            messages=user_messages,
+        )
+        return response.content[0].text
+
+    async def complete_structured(
+        self, messages: list[dict[str, Any]], schema: dict[str, Any], **kwargs: Any
+    ) -> dict[str, Any]:
+        import json
+
+        text = await self.complete(
+            messages + [{"role": "user", "content": "Respond in valid JSON."}],
+            **kwargs,
+        )
+        return json.loads(text)
+
+
+class DeepSeekProvider(OpenAIProvider):
+    """DeepSeek provider — uses OpenAI-compatible API."""
+
+    def __init__(self, config: ModelConfig) -> None:
+        if not config.base_url:
+            config = config.model_copy(update={"base_url": "https://api.deepseek.com"})
+        super().__init__(config)
+
+
+class LocalProvider(ModelProvider):
+    """Stub for local model provider."""
+
+    def __init__(self, config: ModelConfig) -> None:
+        self.config = config
+
+    async def complete(self, messages: list[dict[str, Any]], **kwargs: Any) -> str:
+        return "Local model response (stub)"
+
+    async def complete_structured(
+        self, messages: list[dict[str, Any]], schema: dict[str, Any], **kwargs: Any
+    ) -> dict[str, Any]:
+        return {"result": "stub"}
+
+
+# Register built-in providers
+ProviderFactory.register("openai", OpenAIProvider)
+ProviderFactory.register("anthropic", AnthropicProvider)
+ProviderFactory.register("deepseek", DeepSeekProvider)
+ProviderFactory.register("local", LocalProvider)

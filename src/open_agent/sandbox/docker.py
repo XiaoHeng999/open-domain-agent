@@ -1,0 +1,94 @@
+"""Docker sandbox fallback — used when Daytona is unavailable."""
+
+from __future__ import annotations
+
+import asyncio
+from typing import Any
+
+from open_agent.base import BaseComponent
+from open_agent.decorators import tool_schema
+
+
+class DockerSandbox(BaseComponent):
+    """Docker-based sandbox for isolated command execution."""
+
+    def __init__(self, config: dict[str, Any] | None = None) -> None:
+        self.config = config or {}
+        self._client = None
+        self._container = None
+        self._image = self.config.get("image", "python:3.11-slim")
+
+    async def on_start(self) -> None:
+        try:
+            import docker
+            self._client = docker.from_env()
+            self._container = self._client.containers.run(
+                self._image,
+                command="tail -f /dev/null",
+                detach=True,
+                tty=True,
+                mem_limit=self.config.get("mem_limit", "512m"),
+                network_mode=self.config.get("network_mode", "none"),
+            )
+        except ImportError:
+            raise ImportError("Install docker: pip install docker")
+        except Exception as e:
+            raise RuntimeError(f"Failed to start Docker container: {e}")
+
+    async def on_stop(self) -> None:
+        if self._container:
+            try:
+                self._container.stop(timeout=5)
+                self._container.remove()
+            except Exception:
+                pass
+
+    @tool_schema(name="sandbox_exec")
+    async def exec(self, command: str, timeout: int = 30) -> dict[str, Any]:
+        if not self._container:
+            return {"success": False, "error": "Sandbox not started"}
+        try:
+            exit_code, output = self._container.exec_run(cmd=f"bash -c '{command}'")
+            return {"success": True, "exit_code": exit_code, "output": output.decode(errors="replace")}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    @tool_schema(name="sandbox_read_file")
+    async def read_file(self, path: str) -> dict[str, Any]:
+        if not self._container:
+            return {"success": False, "error": "Sandbox not started"}
+        try:
+            import tarfile
+            import io
+            bits, stat = self._container.get_archive(path)
+            tar_stream = io.BytesIO(b"".join(bits))
+            tar = tarfile.open(fileobj=tar_stream)
+            member = tar.getmembers()[0]
+            content = tar.extractfile(member).read().decode()
+            return {"success": True, "content": content}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    @tool_schema(name="sandbox_write_file")
+    async def write_file(self, path: str, content: str) -> dict[str, Any]:
+        if not self._container:
+            return {"success": False, "error": "Sandbox not started"}
+        try:
+            self._container.exec_run(cmd=f"bash -c 'cat > {path} << \"ENDOFFILE\"\n{content}\nENDOFFILE'")
+            return {"success": True}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    @tool_schema(name="sandbox_snapshot")
+    async def snapshot(self) -> dict[str, Any]:
+        if not self._container:
+            return {"success": False, "error": "Sandbox not started"}
+        try:
+            image = self._container.commit()
+            return {"success": True, "snapshot_id": image.id}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    @tool_schema(name="sandbox_restore")
+    async def restore(self, snapshot_id: str) -> dict[str, Any]:
+        return {"success": False, "error": "Docker restore not fully supported - use Daytona for snapshots"}
