@@ -8,6 +8,7 @@ from typing import Any
 
 from open_agent.base import BaseComponent
 from open_agent.config import AgentConfig, load_config
+from open_agent.errors import AgentError
 from open_agent.registry import ToolRegistry
 from open_agent.trace import SpanKind, Trace, TraceManager
 from open_agent.routing.router import RoutingPipeline, RoutingDecision
@@ -209,6 +210,7 @@ class AgentRuntime(BaseComponent):
                 config=self.config.checkpoint,
                 storage=storage,
             )
+            self.react_loop._checkpoint_manager = self.checkpoint_manager
 
     async def on_stop(self) -> None:
         """Clean up all subsystems."""
@@ -295,11 +297,31 @@ class AgentRuntime(BaseComponent):
                 prompt_context["plan"] = plan_text
 
         # Stage 4: ReAct execution
-        response = await self.react_loop.run(
-            user_input=user_input,
-            routing_decision=routing_decision,
-            trace=trace,
-        )
+        try:
+            response = await self.react_loop.run(
+                user_input=user_input,
+                routing_decision=routing_decision,
+                trace=trace,
+            )
+        except AgentError as exc:
+            # Record failure pattern to episodic memory if checkpoint exists
+            if self.checkpoint_manager and self._retrieval_memory:
+                checkpoints = self.checkpoint_manager.list_checkpoints()
+                if checkpoints:
+                    tools_used = list({
+                        s.action.tool_name
+                        for s in self.react_loop._tool_messages
+                        if s.get("role") == "assistant"
+                        for block in s.get("content", [])
+                        if block.get("type") == "tool_use"
+                    }) if self.react_loop._tool_messages else []
+                    await self._retrieval_memory.write_episodic(
+                        intent=routing_decision.intent.intent if routing_decision else "unknown",
+                        steps_summary=f"Failed: {exc}. Tools used: {', '.join(tools_used)}",
+                        result="failure",
+                        success=False,
+                    )
+            raise
 
         # Update runtime memory with this turn
         if self._runtime_memory:
@@ -360,6 +382,41 @@ class AgentRuntime(BaseComponent):
                     for step in response.state.steps
                 ],
             },
+        )
+
+    async def resume(self, checkpoint_id: str, user_input: str) -> AgentResponse:
+        """Resume execution from a saved checkpoint."""
+        start_time = time.time()
+
+        if self.checkpoint_manager is None:
+            raise AgentError("Checkpoint manager not available")
+
+        execution_state = self.checkpoint_manager.resume_from_checkpoint(checkpoint_id)
+        if execution_state is None:
+            raise AgentError(f"Checkpoint not found: {checkpoint_id}")
+
+        trace = self.trace_manager.create_trace(
+            metadata={"user_input": user_input, "resumed_from": checkpoint_id},
+        )
+
+        # Rebuild routing decision
+        routing_decision = await self.routing_pipeline.route(user_input, trace=trace)
+
+        response = await self.react_loop.run(
+            user_input=user_input,
+            routing_decision=routing_decision,
+            trace=trace,
+            resume_state=execution_state,
+        )
+
+        duration_ms = (time.time() - start_time) * 1000
+
+        return AgentResponse(
+            output=response.answer,
+            trace_id=trace.trace_id,
+            routing=routing_decision,
+            duration_ms=duration_ms,
+            metadata={"resumed": True, "checkpoint_id": checkpoint_id},
         )
 
     async def run_eval_scenario(self, scenario) -> dict[str, Any]:

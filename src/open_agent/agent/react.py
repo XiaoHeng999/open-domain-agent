@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from open_agent.checkpoint.manager import ExecutionState
 from open_agent.errors import AgentError, ToolError
 from open_agent.registry import ToolRegistry
 from open_agent.routing.router import RoutingDecision
@@ -138,6 +139,7 @@ class ReActLoop:
         todo_manager: Any = None,
         staleness_rounds: int = 3,
         hook_manager: HookManager | None = None,
+        checkpoint_manager: Any = None,
     ) -> None:
         self._registry = tool_registry
         self._max_iterations = max_iterations
@@ -147,6 +149,7 @@ class ReActLoop:
         self._todo_manager = todo_manager
         self._staleness_rounds = staleness_rounds
         self._hook_manager = hook_manager
+        self._checkpoint_manager = checkpoint_manager
         # Backward compat: internal conversation history when no RuntimeMemory
         self._conversation_history: list[dict[str, str]] = []
         # Injected externally by AgentRuntime
@@ -167,6 +170,7 @@ class ReActLoop:
         user_input: str,
         routing_decision: RoutingDecision,
         trace: Trace | None = None,
+        resume_state: ExecutionState | None = None,
     ) -> AgentResponse:
         """Run the full ReAct loop for *user_input*."""
         state = AgentState()
@@ -176,6 +180,14 @@ class ReActLoop:
             if routing_decision and routing_decision.domain and routing_decision.domain.system_prompt
             else None
         )
+        self._resumed_from_step: int | None = None
+
+        # Resume: rebuild tool messages and set start iteration
+        start_iteration = 0
+        if resume_state is not None:
+            self._tool_messages = list(resume_state.tool_calls_completed)
+            start_iteration = resume_state.next_step
+            self._resumed_from_step = resume_state.next_step
 
         root_span: Span | None = None
         if trace:
@@ -196,7 +208,7 @@ class ReActLoop:
         repeat_count = 0
 
         try:
-            for iteration in range(self._max_iterations):
+            for iteration in range(start_iteration, self._max_iterations):
                 step = ReActStep(index=iteration)
 
                 # Increment task state
@@ -253,6 +265,43 @@ class ReActLoop:
                     step.action, iteration, trace,
                 )
                 state.add_step(step)
+
+                # 3. Checkpoint after each completed step
+                if self._checkpoint_manager is not None:
+                    step_num = len(state.steps)
+                    if self._checkpoint_manager.should_checkpoint(step_num):
+                        context = {
+                            "steps_summary": [
+                                {
+                                    "thought": s.thought.content if s.thought else None,
+                                    "action": s.action.tool_name if s.action else None,
+                                    "observation": (s.observation.content[:200] if s.observation else None),
+                                }
+                                for s in state.steps
+                            ],
+                        }
+                        tool_calls = list(self._tool_messages)
+                        memory_state: dict[str, Any] = {}
+                        if self._runtime_memory is not None:
+                            ts = self._runtime_memory.task_state
+                            memory_state = {
+                                "step_count": ts.step_count,
+                                "status": ts.status,
+                            }
+                        cp = self._checkpoint_manager.save_checkpoint(
+                            step_number=step_num,
+                            context=context,
+                            tool_calls=tool_calls,
+                            memory_state=memory_state,
+                        )
+                        if trace is not None:
+                            cp_span = trace.create_span(
+                                "checkpoint_save",
+                                kind=SpanKind.CHECKPOINT,
+                            )
+                            cp_span.set_attribute("step_number", step_num)
+                            cp_span.set_attribute("checkpoint_id", cp.idempotency_key)
+                            cp_span.finish()
 
         except AgentError:
             raise
@@ -567,6 +616,9 @@ class ReActLoop:
             if self._session_welcome:
                 system_content = system_content + "\n\n" + self._session_welcome
                 system_content = self._domain_system_prompt + "\n\n" + system_content
+            # Inject resumed-from marker
+            if self._resumed_from_step is not None:
+                system_content += f"\n\n<resumed_from_step={self._resumed_from_step}>"
         else:
             system_content = "You are a helpful agent using the ReAct framework."
 
