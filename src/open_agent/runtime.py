@@ -156,6 +156,15 @@ class AgentRuntime(BaseComponent):
             trace=trace,
         )
 
+        # Update short-term memory: record this turn so the next call
+        # has conversation context.
+        self.react_loop._conversation_history.append(
+            {"role": "user", "content": user_input}
+        )
+        self.react_loop._conversation_history.append(
+            {"role": "assistant", "content": response.answer}
+        )
+
         # Stage 4: Monitoring
         anomalies = self.anomaly_detector.detect(trace)
         quality = self.quality_scorer.score(trace)

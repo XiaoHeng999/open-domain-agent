@@ -145,6 +145,8 @@ class ReActLoop:
         self._max_iterations = max_iterations
         self._provider = provider
         self._prompt_builder = prompt_builder
+        # Short-term memory: previous turns in the current session
+        self._conversation_history: list[dict[str, str]] = []
 
     # -- public API ----------------------------------------------------------
 
@@ -416,8 +418,12 @@ class ReActLoop:
 
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_content},
-            {"role": "user", "content": user_input},
         ]
+        # Short-term memory: previous turns from this session
+        for turn in self._conversation_history:
+            messages.append(turn)
+        # Current user input
+        messages.append({"role": "user", "content": user_input})
         # Conversation history: previous steps
         for step in state.steps:
             if step.thought:

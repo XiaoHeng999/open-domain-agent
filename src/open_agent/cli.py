@@ -77,21 +77,57 @@ def chat(
     workspace: str = typer.Option(".", "--workspace", "-w", help="Workspace directory"),
 ) -> None:
     """Start interactive multi-turn chat."""
+    from open_agent.runtime import AgentRuntime
+
     cfg = load_config(config, workspace=workspace)
     console.print(Panel("[bold]Interactive Chat Mode[/bold]", title="Open Agent"))
+    console.print(f"[dim]Config: {cfg.model.provider}/{cfg.model.name}[/dim]")
     console.print("[dim]Type 'exit' or Ctrl+C to quit.[/dim]\n")
 
-    while True:
-        try:
-            user_input = console.input("[bold cyan]You:[/] ").strip()
-            if user_input.lower() in ("exit", "quit"):
-                break
-            if not user_input:
-                continue
-            console.print(f"[green]Agent:[/] (stub response) You said: {user_input}")
-        except (KeyboardInterrupt, EOFError):
-            break
+    runtime = AgentRuntime(config=cfg)
 
+    async def _run():
+        await runtime.on_start()
+        try:
+            while True:
+                try:
+                    # Read input inside the async loop so we can yield
+                    user_input = input("\033[1;36mYou:\033[0m ").strip()
+                except (KeyboardInterrupt, EOFError):
+                    break
+                if user_input.lower() in ("exit", "quit"):
+                    break
+                if not user_input:
+                    continue
+
+                try:
+                    response = await runtime.run(user_input)
+
+                    # Display steps
+                    for i, step_info in enumerate(response.metadata.get("steps", [])):
+                        console.print(f"[bold cyan]Step {i + 1}:[/]")
+                        if step_info.get("thought"):
+                            console.print(f"  [yellow]Thought:[/] {step_info['thought']}")
+                        if step_info.get("action"):
+                            console.print(f"  [blue]Action:[/] {step_info['action']}")
+                        if step_info.get("observation"):
+                            console.print(f"  [green]Observation:[/] {step_info['observation']}")
+
+                    console.print(f"\n[bold green]Answer:[/] {response.output}")
+                    console.print(
+                        f"[dim]Trace: {response.trace_id} | "
+                        f"Steps: {response.metadata.get('total_steps', '?')} | "
+                        f"Duration: {response.duration_ms:.0f}ms[/dim]\n"
+                    )
+                except Exception as exc:
+                    console.print(f"[red]Error: {exc}[/red]\n")
+        finally:
+            await runtime.on_stop()
+
+    try:
+        _run_async(_run())
+    except KeyboardInterrupt:
+        pass
     console.print("[dim]Goodbye.[/dim]")
 
 
