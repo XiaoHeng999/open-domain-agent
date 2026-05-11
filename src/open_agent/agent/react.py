@@ -1,7 +1,18 @@
-"""ReAct Loop Core — Thought → Action → Observation → Reflection cycle."""
+"""ReAct Loop Core — Thought → Action → Observation cycle.
+
+Implements the industry-standard agentic loop pattern used by Claude Code
+and OpenAI Codex:
+
+- Tool schemas are passed to the LLM so it knows exactly what tools exist.
+- The loop continues when the LLM calls a tool, stops when it gives a
+  direct text answer (no tool call).
+- Deterministic stop conditions: direct_answer, repeated actions, max steps.
+- No separate "reflection" LLM call — stopping is structural, not probabilistic.
+"""
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
@@ -14,18 +25,6 @@ from open_agent.trace import Span, SpanKind, Trace
 
 logger = logging.getLogger("open_agent")
 
-# Lazy import to avoid circular dependency — resolved at runtime
-_PROMPT_BUILDER_TYPES: tuple = ()
-_PROMPT_BUILDER_CLS: type | None = None
-
-
-def _get_prompt_builder_type() -> type:
-    global _PROMPT_BUILDER_CLS
-    if _PROMPT_BUILDER_CLS is None:
-        from open_agent.prompt.builder import PromptBuilder
-        _PROMPT_BUILDER_CLS = PromptBuilder
-    return _PROMPT_BUILDER_CLS
-
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -36,7 +35,6 @@ class StepType(str, Enum):
     THOUGHT = "thought"
     ACTION = "action"
     OBSERVATION = "observation"
-    REFLECTION = "reflection"
 
 
 @dataclass
@@ -68,7 +66,7 @@ class Observation:
 
 @dataclass
 class Reflection:
-    """Agent's evaluation of progress toward the goal."""
+    """Agent's evaluation of progress — kept for backward compat."""
 
     content: str
     should_continue: bool = True
@@ -83,10 +81,9 @@ class ReActStep:
     thought: Thought | None = None
     action: Action | None = None
     observation: Observation | None = None
-    reflection: Reflection | None = None
 
     def is_complete(self) -> bool:
-        return all(x is not None for x in (self.thought, self.action, self.observation, self.reflection))
+        return all(x is not None for x in (self.thought, self.action, self.observation))
 
 
 @dataclass
@@ -119,9 +116,13 @@ class AgentResponse:
 # ReAct Loop
 # ---------------------------------------------------------------------------
 
+# Sentinel: the LLM returns this tool_name when it wants to give a final
+# answer without calling any real tool.
+_DIRECT_ANSWER_TOOL = "direct_answer"
+
 
 class ReActLoop:
-    """Execute the Thought → Action → Observation → Reflection cycle.
+    """Execute the Thought → Action → Observation cycle.
 
     Parameters
     ----------
@@ -130,7 +131,7 @@ class ReActLoop:
     max_iterations : int
         Hard cap on ReAct iterations (default 10).
     provider : Any
-        Optional LLM provider for generating thoughts and reflections.
+        Optional LLM provider for generating thoughts and actions.
     """
 
     def __init__(
@@ -153,11 +154,7 @@ class ReActLoop:
         routing_decision: RoutingDecision,
         trace: Trace | None = None,
     ) -> AgentResponse:
-        """Run the full ReAct loop for *user_input*.
-
-        If *routing_decision.skip_planning* is ``True`` the loop executes
-        without a prior planning step (fast-path for simple tasks).
-        """
+        """Run the full ReAct loop for *user_input*."""
         state = AgentState()
 
         root_span: Span | None = None
@@ -169,41 +166,60 @@ class ReActLoop:
             root_span.set_attribute("user_input", user_input)
             root_span.set_attribute("skip_planning", routing_decision.skip_planning)
 
+        # Track last action for repeat detection
+        last_action_key: tuple[str, str] | None = None
+        repeat_count = 0
+
         try:
             for iteration in range(self._max_iterations):
                 step = ReActStep(index=iteration)
 
-                # 1. Thought
-                step.thought = await self._generate_thought(
+                # 1. Thought + Action (single LLM call — decides tool & args)
+                thought_content, action = await self._think_and_act(
                     user_input, state, iteration, trace,
                 )
+                step.thought = Thought(content=thought_content, step_index=iteration)
+                step.action = action
 
-                # 2. Action
-                step.action = await self._decide_action(
-                    user_input, state, step.thought, iteration, trace,
-                )
+                # -- Deterministic stop conditions ------------------------
 
-                # 3. Observation
+                # (a) direct_answer → LLM chose not to call any tool → stop
+                if action.tool_name == _DIRECT_ANSWER_TOOL:
+                    step.observation = Observation(
+                        content=action.args.get("answer", ""),
+                        tool_name=_DIRECT_ANSWER_TOOL,
+                        success=True,
+                        step_index=iteration,
+                    )
+                    state.add_step(step)
+                    break
+
+                # (b) Repeated action detection (same tool + same args)
+                action_key = (action.tool_name, json.dumps(action.args, sort_keys=True))
+                if action_key == last_action_key:
+                    repeat_count += 1
+                    if repeat_count >= 3:
+                        logger.warning(
+                            "Stopping: action %s repeated %d times",
+                            action.tool_name, repeat_count + 1,
+                        )
+                        step.observation = Observation(
+                            content=f"Action {action.tool_name} repeated with identical arguments. Stopping to prevent loop.",
+                            tool_name=action.tool_name,
+                            success=False,
+                            step_index=iteration,
+                        )
+                        state.add_step(step)
+                        break
+                else:
+                    repeat_count = 0
+                last_action_key = action_key
+
+                # 2. Execute the tool
                 step.observation = await self._execute_action(
                     step.action, iteration, trace,
                 )
-
-                # 4. Reflection
-                step.reflection = await self._reflect(
-                    user_input, state, step.observation, iteration, trace,
-                )
-
                 state.add_step(step)
-
-                if not step.reflection.should_continue:
-                    break
-
-            # Build final answer
-            if state.steps:
-                state.final_answer = self._compose_final_answer(user_input, state)
-            else:
-                state.final_answer = "No steps were executed."
-            state.finished = True
 
         except AgentError:
             raise
@@ -212,6 +228,13 @@ class ReActLoop:
             if root_span:
                 root_span.finish(status=SpanKind.AGENT_LOOP, error=str(exc))
             raise AgentError(f"ReAct loop failed: {exc}") from exc
+
+        # Build final answer
+        if state.steps:
+            state.final_answer = self._compose_final_answer(user_input, state)
+        else:
+            state.final_answer = "No steps were executed."
+        state.finished = True
 
         if root_span:
             root_span.set_attribute("total_steps", len(state.steps))
@@ -227,58 +250,42 @@ class ReActLoop:
 
     # -- internal steps ------------------------------------------------------
 
-    async def _generate_thought(
+    async def _think_and_act(
         self,
         user_input: str,
         state: AgentState,
         iteration: int,
         trace: Trace | None,
-    ) -> Thought:
-        span = self._begin_step_span(trace, "thought", iteration)
+    ) -> tuple[str, Action]:
+        """Single LLM call: generate thought and decide action.
+
+        Returns (thought_content, Action).
+        """
+        span = self._begin_step_span(trace, "think_and_act", iteration)
 
         if self._provider:
-            messages = self._build_messages(user_input, state, "Think about what to do next.")
-            content = await self._provider.complete(messages)
-        else:
-            content = self._rule_based_thought(user_input, state, iteration)
-
-        if span:
-            span.set_attribute("thought", content)
-            span.finish()
-
-        return Thought(content=content, step_index=iteration)
-
-    async def _decide_action(
-        self,
-        user_input: str,
-        state: AgentState,
-        thought: Thought,
-        iteration: int,
-        trace: Trace | None,
-    ) -> Action:
-        span = self._begin_step_span(trace, "action", iteration)
-
-        if self._provider:
-            messages = self._build_messages(
-                user_input,
-                state,
-                f"Based on thought: {thought.content}. Decide which tool to call and with what arguments.",
-            )
+            messages = self._build_messages(user_input, state)
             raw = await self._provider.complete_structured(
                 messages,
-                schema={"tool_name": "string", "args": "object"},
+                schema=self._tool_schema(),
             )
-            tool_name = raw.get("tool_name", "direct_answer")
+            thought_content = raw.get("thought", "")
+            tool_name = raw.get("tool_name", _DIRECT_ANSWER_TOOL)
             args = raw.get("args", {})
         else:
-            tool_name, args = self._rule_based_action(user_input, state)
+            thought_content, tool_name, args = self._rule_based_think_and_act(
+                user_input, state, iteration,
+            )
+
+        action = Action(tool_name=tool_name, args=args, step_index=iteration)
 
         if span:
+            span.set_attribute("thought", thought_content)
             span.set_attribute("tool_name", tool_name)
             span.set_attribute("args", str(args))
             span.finish()
 
-        return Action(tool_name=tool_name, args=args, step_index=iteration)
+        return thought_content, action
 
     async def _execute_action(
         self,
@@ -289,10 +296,7 @@ class ReActLoop:
         span = self._begin_step_span(trace, "observation", iteration)
 
         try:
-            if action.tool_name == "direct_answer":
-                content = action.args.get("answer", "")
-                success = True
-            elif self._registry.has(action.tool_name):
+            if self._registry.has(action.tool_name):
                 entry = self._registry.get(action.tool_name)
                 result = entry.handler(**action.args)
                 content = str(result)
@@ -318,43 +322,6 @@ class ReActLoop:
             step_index=iteration,
         )
 
-    async def _reflect(
-        self,
-        user_input: str,
-        state: AgentState,
-        observation: Observation,
-        iteration: int,
-        trace: Trace | None,
-    ) -> Reflection:
-        span = self._begin_step_span(trace, "reflection", iteration)
-
-        if self._provider:
-            messages = self._build_messages(
-                user_input,
-                state,
-                f"Observation: {observation.content}. Should we continue?",
-            )
-            raw = await self._provider.complete_structured(
-                messages,
-                schema={"content": "string", "should_continue": "boolean"},
-            )
-            content = raw.get("content", "")
-            should_continue = raw.get("should_continue", True)
-        else:
-            content, should_continue = self._rule_based_reflection(
-                user_input, observation, iteration,
-            )
-
-        if span:
-            span.set_attribute("should_continue", should_continue)
-            span.finish()
-
-        return Reflection(
-            content=content,
-            should_continue=should_continue,
-            step_index=iteration,
-        )
-
     # -- helpers -------------------------------------------------------------
 
     @staticmethod
@@ -371,75 +338,126 @@ class ReActLoop:
         span.set_attribute("phase", phase)
         return span
 
+    def _tool_schema(self) -> dict[str, Any]:
+        """Build the JSON schema describing the expected LLM output.
+
+        This is the industry-standard pattern: the schema tells the LLM
+        exactly what tools exist and what arguments they accept, so it can
+        produce well-structured output.  The special ``direct_answer`` tool
+        acts as the "no tool call" signal — when the LLM returns this,
+        the loop stops (same as ``stop_reason: "end_turn"`` in Claude/OpenAI).
+        """
+        available = []
+        for entry in self._registry.list_tools():
+            desc = entry.description or entry.schema.get("description", "")
+            schema = entry.schema.get("inputSchema", entry.schema.get("parameters", {}))
+            available.append({
+                "name": entry.name,
+                "description": desc,
+                "parameters": schema.get("properties", {}),
+            })
+
+        return {
+            "thought": "string — your reasoning about what to do next",
+            "tool_name": f"string — name of the tool to call. Use '{_DIRECT_ANSWER_TOOL}' if you can answer directly without any tool.",
+            "args": "object — arguments for the tool. For direct_answer, use {\"answer\": \"your response\"}.",
+            "_available_tools": available,
+        }
+
     def _build_messages(
         self,
         user_input: str,
         state: AgentState,
-        prompt: str,
     ) -> list[dict[str, Any]]:
+        """Build the message list for the LLM call.
+
+        The system prompt includes:
+        1. Agent identity
+        2. Available tools with their schemas (so the LLM knows what it can call)
+        3. The expected JSON output format
+        """
         # System prompt: use PromptBuilder if available, else minimal default
-        # Include JSON instruction so providers like DeepSeek accept response_format
         if self._prompt_builder is not None:
             system_content = self._prompt_builder.build(
                 context={"matched_skills": getattr(self, "_matched_skills", [])}
             )
         else:
             system_content = "You are a helpful agent using the ReAct framework."
-        system_content += "\nWhen asked to decide an action, respond with valid JSON."
+
+        # Append tool definitions and JSON format instructions
+        tool_schema = self._tool_schema()
+        tools_desc = tool_schema["_available_tools"]
+
+        if tools_desc:
+            tools_text = "Available tools:\n"
+            for t in tools_desc:
+                params = t["parameters"]
+                params_str = ", ".join(
+                    f"{k}: {v}" for k, v in params.items()
+                ) if params else "(no parameters)"
+                tools_text += f"- {t['name']}: {t['description']} — params: {params_str}\n"
+            tools_text += (
+                f"\nIf you can answer the user's question directly without using any tool, "
+                f"set tool_name to \"{_DIRECT_ANSWER_TOOL}\" and args to {{\"answer\": \"your response\"}}."
+            )
+        else:
+            tools_text = (
+                f"No tools are available. Set tool_name to \"{_DIRECT_ANSWER_TOOL}\" "
+                f"and args to {{\"answer\": \"your response\"}}."
+            )
+
+        system_content += (
+            f"\n\n{tools_text}"
+            "\n\nYou MUST respond in valid JSON with exactly these fields:"
+            f"\n- \"thought\": your reasoning (string)"
+            f"\n- \"tool_name\": the tool to call, or \"{_DIRECT_ANSWER_TOOL}\" to answer directly (string)"
+            '\n- "args": the arguments object'
+        )
 
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_content},
             {"role": "user", "content": user_input},
         ]
+        # Conversation history: previous steps
         for step in state.steps:
             if step.thought:
                 messages.append({"role": "assistant", "content": f"Thought: {step.thought.content}"})
             if step.action:
                 messages.append({
                     "role": "assistant",
-                    "content": f"Action: {step.action.tool_name}({step.action.args})",
+                    "content": f"Action: {step.action.tool_name}({json.dumps(step.action.args)})",
                 })
             if step.observation:
                 messages.append({"role": "user", "content": f"Observation: {step.observation.content}"})
-        messages.append({"role": "user", "content": prompt})
         return messages
 
     @staticmethod
-    def _rule_based_thought(
+    def _rule_based_think_and_act(
         user_input: str,
         state: AgentState,
         iteration: int,
-    ) -> str:
+    ) -> tuple[str, str, dict[str, Any]]:
+        """Fallback for when no LLM provider is configured."""
+        # After first step, stop — rule-based mode has no tools.
+        if state.steps:
+            return "Task already addressed.", _DIRECT_ANSWER_TOOL, {"answer": ""}
         if iteration == 0:
-            return f"I need to address the user's request: {user_input}"
-        return f"Continuing to work on the request (step {iteration + 1})"
-
-    @staticmethod
-    def _rule_based_action(
-        user_input: str,
-        state: AgentState,
-    ) -> tuple[str, dict[str, Any]]:
-        # If no tools registered, give a direct answer.
-        if len(state.steps) == 0:
-            return "direct_answer", {"answer": user_input}
-        return "direct_answer", {"answer": user_input}
-
-    @staticmethod
-    def _rule_based_reflection(
-        user_input: str,
-        observation: Observation,
-        iteration: int,
-    ) -> tuple[str, bool]:
-        # For rule-based mode, stop after first successful observation.
-        if observation.success and iteration == 0:
-            return "Task completed successfully.", False
-        if iteration >= 1:
-            return "Maximum useful iterations reached.", False
-        return "Need more information.", True
+            thought = f"I need to address the user's request: {user_input}"
+        else:
+            thought = f"Continuing to work on the request (step {iteration + 1})"
+        return thought, _DIRECT_ANSWER_TOOL, {"answer": user_input}
 
     @staticmethod
     def _compose_final_answer(user_input: str, state: AgentState) -> str:
-        # Use the last successful observation as the answer basis.
+        # Use the last direct_answer observation, or last successful observation
+        for step in reversed(state.steps):
+            if (
+                step.observation
+                and step.observation.success
+                and step.action
+                and step.action.tool_name == _DIRECT_ANSWER_TOOL
+            ):
+                return step.observation.content or step.action.args.get("answer", "")
         for step in reversed(state.steps):
             if step.observation and step.observation.success:
                 return step.observation.content

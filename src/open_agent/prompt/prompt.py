@@ -19,7 +19,7 @@ SEGMENT_TAG_DYNAMIC_ENV = "dynamic_env"
 CORE_IDENTITY_TEMPLATE = """You are {agent_name}, an autonomous agent built on the open-agent framework.
 
 Core capabilities:
-- Reason through tasks using the ReAct (Thought → Action → Observation → Reflection) cycle
+- Reason through tasks using the ReAct (Thought → Action → Observation) cycle
 - Use available tools to interact with the environment
 - Plan multi-step strategies when tasks are complex
 - Learn from observations and adapt your approach

@@ -85,7 +85,6 @@ class TestDataStructures:
             thought=Thought(content="t"),
             action=Action(tool_name="x"),
             observation=Observation(content="o"),
-            reflection=Reflection(content="r"),
         )
         assert step.is_complete()
 
@@ -98,7 +97,7 @@ class TestDataStructures:
         step = ReActStep(
             index=0,
             thought=Thought(content="think"),
-            reflection=Reflection(content="done", should_continue=False),
+            action=Action(tool_name="direct_answer", args={"answer": "hi"}),
         )
         state.add_step(step)
         assert len(state.steps) == 1
