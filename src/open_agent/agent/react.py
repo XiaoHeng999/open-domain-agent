@@ -132,6 +132,12 @@ class ReActLoop:
         Hard cap on ReAct iterations (default 10).
     provider : Any
         Optional LLM provider for generating thoughts and actions.
+    runtime_memory : Any
+        Optional RuntimeMemory for managing context window.
+    todo_manager : Any
+        Optional TodoManager for session task plans.
+    staleness_rounds : int
+        Rounds before todo staleness reminder.
     """
 
     def __init__(
@@ -140,13 +146,21 @@ class ReActLoop:
         max_iterations: int = 10,
         provider: Any = None,
         prompt_builder: Any = None,
+        runtime_memory: Any = None,
+        todo_manager: Any = None,
+        staleness_rounds: int = 3,
     ) -> None:
         self._registry = tool_registry
         self._max_iterations = max_iterations
         self._provider = provider
         self._prompt_builder = prompt_builder
-        # Short-term memory: previous turns in the current session
+        self._runtime_memory = runtime_memory
+        self._todo_manager = todo_manager
+        self._staleness_rounds = staleness_rounds
+        # Backward compat: internal conversation history when no RuntimeMemory
         self._conversation_history: list[dict[str, str]] = []
+        # Injected externally by AgentRuntime
+        self._matched_skills: list[dict[str, Any]] = []
 
     # -- public API ----------------------------------------------------------
 
@@ -168,6 +182,11 @@ class ReActLoop:
             root_span.set_attribute("user_input", user_input)
             root_span.set_attribute("skip_planning", routing_decision.skip_planning)
 
+        # Initialize task state if using RuntimeMemory
+        if self._runtime_memory is not None:
+            from open_agent.memory.models import TaskState
+            self._runtime_memory._task_state = TaskState()
+
         # Track last action for repeat detection
         last_action_key: tuple[str, str] | None = None
         repeat_count = 0
@@ -175,6 +194,10 @@ class ReActLoop:
         try:
             for iteration in range(self._max_iterations):
                 step = ReActStep(index=iteration)
+
+                # Increment task state
+                if self._runtime_memory is not None:
+                    self._runtime_memory.task_state.increment_step()
 
                 # 1. Thought + Action (single LLM call — decides tool & args)
                 thought_content, action = await self._think_and_act(
@@ -194,6 +217,8 @@ class ReActLoop:
                         step_index=iteration,
                     )
                     state.add_step(step)
+                    if self._runtime_memory is not None:
+                        self._runtime_memory.task_state.mark_finished("direct_answer")
                     break
 
                 # (b) Repeated action detection (same tool + same args)
@@ -212,6 +237,8 @@ class ReActLoop:
                             step_index=iteration,
                         )
                         state.add_step(step)
+                        if self._runtime_memory is not None:
+                            self._runtime_memory.task_state.mark_finished("repeated_action")
                         break
                 else:
                     repeat_count = 0
@@ -266,7 +293,7 @@ class ReActLoop:
         span = self._begin_step_span(trace, "think_and_act", iteration)
 
         if self._provider:
-            messages = self._build_messages(user_input, state)
+            messages = await self._build_messages(user_input, state)
             raw = await self._provider.complete_structured(
                 messages,
                 schema=self._tool_schema(),
@@ -297,10 +324,21 @@ class ReActLoop:
     ) -> Observation:
         span = self._begin_step_span(trace, "observation", iteration)
 
+        # Staleness reminder injection
+        staleness_prefix = self._check_staleness()
+
         try:
             if self._registry.has(action.tool_name):
                 entry = self._registry.get(action.tool_name)
-                result = entry.handler(**action.args)
+
+                # Handle todo tool specially — inject TodoManager
+                if action.tool_name == "todo" and self._todo_manager is not None:
+                    result = entry.handler(**action.args, _todo_manager=self._todo_manager)
+                    # Reset todo staleness counter
+                    if self._runtime_memory is not None:
+                        self._runtime_memory.task_state.reset_todo_counter()
+                else:
+                    result = entry.handler(**action.args)
                 content = str(result)
                 success = True
             else:
@@ -312,6 +350,9 @@ class ReActLoop:
         except Exception as exc:
             content = f"Execution error: {exc}"
             success = False
+
+        if staleness_prefix:
+            content = staleness_prefix + content
 
         if span:
             span.set_attribute("success", success)
@@ -325,6 +366,15 @@ class ReActLoop:
         )
 
     # -- helpers -------------------------------------------------------------
+
+    def _check_staleness(self) -> str:
+        """Return staleness reminder if todo hasn't been updated recently."""
+        if self._runtime_memory is None or self._todo_manager is None:
+            return ""
+        ts = self._runtime_memory.task_state
+        if ts.rounds_since_todo_update >= self._staleness_rounds and self._todo_manager.has_unfinished():
+            return "<reminder>Refresh your plan before continuing.</reminder>\n"
+        return ""
 
     @staticmethod
     def _begin_step_span(
@@ -341,14 +391,7 @@ class ReActLoop:
         return span
 
     def _tool_schema(self) -> dict[str, Any]:
-        """Build the JSON schema describing the expected LLM output.
-
-        This is the industry-standard pattern: the schema tells the LLM
-        exactly what tools exist and what arguments they accept, so it can
-        produce well-structured output.  The special ``direct_answer`` tool
-        acts as the "no tool call" signal — when the LLM returns this,
-        the loop stops (same as ``stop_reason: "end_turn"`` in Claude/OpenAI).
-        """
+        """Build the JSON schema describing the expected LLM output."""
         available = []
         for entry in self._registry.list_tools():
             desc = entry.description or entry.schema.get("description", "")
@@ -366,23 +409,25 @@ class ReActLoop:
             "_available_tools": available,
         }
 
-    def _build_messages(
+    async def _build_messages(
         self,
         user_input: str,
         state: AgentState,
     ) -> list[dict[str, Any]]:
-        """Build the message list for the LLM call.
+        """Build the message list for the LLM call."""
+        # System prompt
+        prompt_context: dict[str, Any] = {
+            "matched_skills": self._matched_skills,
+        }
 
-        The system prompt includes:
-        1. Agent identity
-        2. Available tools with their schemas (so the LLM knows what it can call)
-        3. The expected JSON output format
-        """
-        # System prompt: use PromptBuilder if available, else minimal default
+        # Inject todo plan
+        if self._todo_manager is not None:
+            plan_text = self._todo_manager.render()
+            if plan_text:
+                prompt_context["todo_plan"] = plan_text
+
         if self._prompt_builder is not None:
-            system_content = self._prompt_builder.build(
-                context={"matched_skills": getattr(self, "_matched_skills", [])}
-            )
+            system_content = self._prompt_builder.build(context=prompt_context)
         else:
             system_content = "You are a helpful agent using the ReAct framework."
 
@@ -419,11 +464,19 @@ class ReActLoop:
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_content},
         ]
-        # Short-term memory: previous turns from this session
-        for turn in self._conversation_history:
-            messages.append(turn)
+
+        # Short-term memory: use RuntimeMemory or fallback to internal list
+        if self._runtime_memory is not None:
+            history = await self._runtime_memory.get_context()
+            for turn in history:
+                messages.append(turn)
+        else:
+            for turn in self._conversation_history:
+                messages.append(turn)
+
         # Current user input
         messages.append({"role": "user", "content": user_input})
+
         # Conversation history: previous steps
         for step in state.steps:
             if step.thought:
@@ -444,7 +497,6 @@ class ReActLoop:
         iteration: int,
     ) -> tuple[str, str, dict[str, Any]]:
         """Fallback for when no LLM provider is configured."""
-        # After first step, stop — rule-based mode has no tools.
         if state.steps:
             return "Task already addressed.", _DIRECT_ANSWER_TOOL, {"answer": ""}
         if iteration == 0:
@@ -455,7 +507,6 @@ class ReActLoop:
 
     @staticmethod
     def _compose_final_answer(user_input: str, state: AgentState) -> str:
-        # Use the last direct_answer observation, or last successful observation
         for step in reversed(state.steps):
             if (
                 step.observation

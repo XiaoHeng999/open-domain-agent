@@ -154,22 +154,46 @@ class MemorySegment(PromptSegment):
     def build(self, context: dict[str, Any]) -> str:
         parts: list[str] = []
 
+        # Runtime memory — conversation context
+        runtime_context = context.get("runtime_memory_context")
+        if runtime_context:
+            parts.append(
+                _p.MEMORY_WORKING_TEMPLATE.format(working_memory=runtime_context)
+            )
+
+        # Backward compat
         working = context.get("working_memory")
-        if working:
+        if working and not runtime_context:
             parts.append(
                 _p.MEMORY_WORKING_TEMPLATE.format(working_memory=working)
             )
 
-        episodic = context.get("episodic_summary")
-        if episodic:
+        # Todo plan
+        todo_plan = context.get("todo_plan")
+        if todo_plan:
             parts.append(
-                _p.MEMORY_EPISODIC_TEMPLATE.format(episodic_summary=episodic)
+                _p.MEMORY_TODO_TEMPLATE.format(todo_plan=todo_plan)
             )
 
-        profile = context.get("user_profile")
-        if profile:
+        # Profile injection
+        profile_text = context.get("user_profile")
+        if profile_text:
             parts.append(
-                _p.MEMORY_PROFILE_TEMPLATE.format(user_profile=profile)
+                _p.MEMORY_PROFILE_TEMPLATE.format(user_profile=profile_text)
+            )
+
+        # Retrieval results
+        retrieval_results = context.get("retrieval_results")
+        if retrieval_results:
+            parts.append(
+                _p.MEMORY_RETRIEVAL_TEMPLATE.format(retrieval_results=retrieval_results)
+            )
+
+        # Backward compat
+        episodic = context.get("episodic_summary")
+        if episodic and not retrieval_results:
+            parts.append(
+                _p.MEMORY_EPISODIC_TEMPLATE.format(episodic_summary=episodic)
             )
 
         if not parts:

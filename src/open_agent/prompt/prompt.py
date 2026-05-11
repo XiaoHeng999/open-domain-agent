@@ -50,6 +50,10 @@ MEMORY_EPISODIC_TEMPLATE = """### Relevant history
 {episodic_summary}"""
 MEMORY_PROFILE_TEMPLATE = """### User preferences
 {user_profile}"""
+MEMORY_RETRIEVAL_TEMPLATE = """### Retrieved memories
+{retrieval_results}"""
+MEMORY_TODO_TEMPLATE = """### Current plan
+{todo_plan}"""
 
 # ── CLAUDE.md ──
 CLAUDEMD_HEADER = "Project directives:"

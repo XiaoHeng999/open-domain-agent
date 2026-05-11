@@ -22,13 +22,35 @@ class ModelConfig(BaseModel):
 
 
 class MemoryConfig(BaseModel):
-    """Memory system configuration."""
+    """Memory system configuration — 4-layer architecture."""
 
-    working_memory_token_limit: int = Field(default=8000, ge=100)
-    compression_threshold: float = Field(default=0.8, ge=0.1, le=1.0)
+    # Runtime layer
+    runtime_token_budget: int = Field(default=8000, ge=100)
+    compression_threshold: float = Field(default=0.7, ge=0.1, le=1.0)
+    aggressive_threshold: float = Field(default=0.9, ge=0.1, le=1.0)
     keep_recent_turns: int = Field(default=3, ge=1)
-    episodic_store_path: str = ".open_agent/episodic.json"
-    user_profile_path: str = ".open_agent/profile.json"
+    max_tool_result_tokens: int = Field(default=2000, ge=100)
+    tool_cache_max_entries: int = Field(default=50, ge=1)
+
+    # Profile layer
+    profile_db_path: str = ".open_agent/memory/profile/profile.sqlite"
+    profile_max_inject_tokens: int = Field(default=500, ge=50)
+
+    # Retrieval layer
+    retrieval_store_dir: str = ".open_agent/memory/retrieval"
+    retrieval_embedding_model: str = "all-MiniLM-L6-v2"
+    retrieval_top_k: int = Field(default=5, ge=1, le=20)
+    retrieval_max_inject_tokens: int = Field(default=1500, ge=100)
+    retrieval_score_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+
+    # Archive layer
+    archive_dir: str = ".open_agent/memory/archive"
+
+    # Session todo
+    todo_staleness_rounds: int = Field(default=3, ge=1)
+
+    # Backward compat aliases
+    working_memory_token_limit: int = Field(default=8000, ge=100)
 
 
 class SafetyConfig(BaseModel):

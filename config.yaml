@@ -27,11 +27,30 @@ model:
   base_url: https://api.deepseek.com/v1
 
 memory:
-  working_memory_token_limit: 8000
-  compression_threshold: 0.8
+  # Runtime layer — session-scoped context window
+  runtime_token_budget: 8000
+  compression_threshold: 0.7
+  aggressive_threshold: 0.9
   keep_recent_turns: 3
-  episodic_store_path: .open_agent/episodic.json
-  user_profile_path: .open_agent/profile.json
+  max_tool_result_tokens: 2000
+  tool_cache_max_entries: 50
+
+  # Profile layer — SQLite-backed user preferences
+  profile_db_path: .open_agent/memory/profile/profile.sqlite
+  profile_max_inject_tokens: 500
+
+  # Retrieval layer — vector-backed episodic + semantic
+  retrieval_store_dir: .open_agent/memory/retrieval
+  retrieval_embedding_model: all-MiniLM-L6-v2
+  retrieval_top_k: 5
+  retrieval_max_inject_tokens: 1500
+  retrieval_score_threshold: 0.5
+
+  # Archive layer — JSONL cold storage
+  archive_dir: .open_agent/memory/archive
+
+  # Session todo
+  todo_staleness_rounds: 3
 
 safety:
   # strict | permissive | off

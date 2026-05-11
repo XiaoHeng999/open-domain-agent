@@ -15,9 +15,11 @@ from open_agent.agent.react import ReActLoop
 from open_agent.agent.planner import PlanGenerator
 from open_agent.model import ProviderFactory
 from open_agent.memory.factory import MemoryFactory
-from open_agent.memory.working import WorkingMemory
-from open_agent.memory.episodic import EpisodicStore
-from open_agent.memory.profile import UserProfileState
+from open_agent.memory.runtime import RuntimeMemory
+from open_agent.memory.profile import ProfileMemory
+from open_agent.memory.retrieval import RetrievalMemory
+from open_agent.memory.archive import ArchiveMemory
+from open_agent.tools.todo import TodoManager, TODO_TOOL_SCHEMA
 from open_agent.skills.registry import SkillRegistry, scan_builtin_skills, scan_workspace_skills
 from open_agent.skills.matcher import SkillMatcher
 from open_agent.safety import SafetyManager
@@ -66,7 +68,15 @@ class AgentRuntime(BaseComponent):
         # Model provider
         self.provider = ProviderFactory.create(self.config.model)
 
-        # Agent core
+        # Memory — 4-layer architecture
+        self.memory_factory = MemoryFactory(self.config.memory)
+        self._runtime_memory: RuntimeMemory | None = None
+        self._profile_memory: ProfileMemory | None = None
+        self._retrieval_memory: RetrievalMemory | None = None
+        self._archive_memory: ArchiveMemory | None = None
+        self._todo_manager: TodoManager | None = None
+
+        # Agent core — will be wired in on_start after memory init
         self.react_loop = ReActLoop(
             tool_registry=self.tool_registry,
             max_iterations=10,
@@ -74,12 +84,6 @@ class AgentRuntime(BaseComponent):
             prompt_builder=self.prompt_builder,
         )
         self.plan_generator = PlanGenerator()
-
-        # Memory
-        self.memory_factory = MemoryFactory(self.config.memory)
-        self._working_memory: WorkingMemory | None = None
-        self._episodic_store: EpisodicStore | None = None
-        self._user_profile: UserProfileState | None = None
 
         # Safety
         self.safety_manager = SafetyManager(self.config.safety, self.config.workspace)
@@ -106,10 +110,26 @@ class AgentRuntime(BaseComponent):
         # Provider
         await self.provider.on_start()
 
-        # Memory
-        self._working_memory = self.memory_factory.create_working_memory()
-        self._episodic_store = self.memory_factory.create_episodic_store()
-        self._user_profile = self.memory_factory.create_user_profile()
+        # Memory — create 4 layers
+        self._runtime_memory = self.memory_factory.create_runtime_memory()
+        self._profile_memory = self.memory_factory.create_profile_memory()
+        self._retrieval_memory = self.memory_factory.create_retrieval_memory()
+        self._archive_memory = self.memory_factory.create_archive_memory()
+        self._todo_manager = TodoManager()
+
+        # Register todo tool
+        from open_agent.tools.todo import todo_handler
+        self.tool_registry.register(
+            name="todo",
+            handler=todo_handler,
+            schema=TODO_TOOL_SCHEMA,
+            description="Manage the current session's task plan.",
+        )
+
+        # Wire memory + todo into ReActLoop
+        self.react_loop._runtime_memory = self._runtime_memory
+        self.react_loop._todo_manager = self._todo_manager
+        self.react_loop._staleness_rounds = self.config.memory.todo_staleness_rounds
 
         # Skills
         scan_builtin_skills(self.skill_registry)
@@ -127,6 +147,8 @@ class AgentRuntime(BaseComponent):
 
     async def on_stop(self) -> None:
         """Clean up all subsystems."""
+        if self._profile_memory:
+            self._profile_memory.close()
         if self.sandbox:
             await self.sandbox.on_stop()
         await super().on_stop()
@@ -138,6 +160,14 @@ class AgentRuntime(BaseComponent):
         # Create trace
         trace = self.trace_manager.create_trace(metadata={"user_input": user_input})
 
+        # Archive: record user message
+        if self._archive_memory:
+            self._archive_memory.write_record({
+                "type": "message",
+                "role": "user",
+                "content": user_input,
+            })
+
         # Stage 1: Routing
         routing_decision = await self.routing_pipeline.route(user_input, trace=trace)
 
@@ -145,46 +175,69 @@ class AgentRuntime(BaseComponent):
         matched_skills = self.skill_matcher.get_skills_for_prompt(
             routing_decision.domain.domain, user_input
         )
-
-        # Inject matched skills into the prompt builder context
         self.react_loop._matched_skills = matched_skills
 
-        # Stage 3: ReAct execution
+        # Stage 3: Build prompt context with all memory layers
+        prompt_context: dict[str, Any] = {
+            "matched_skills": matched_skills,
+        }
+        if self._profile_memory:
+            profile_text = self._profile_memory.get_injection_text()
+            if profile_text:
+                prompt_context["user_profile"] = profile_text
+        if self._todo_manager:
+            plan_text = self._todo_manager.render()
+            if plan_text:
+                prompt_context["todo_plan"] = plan_text
+        if self._retrieval_memory:
+            retrieval_results = await self._retrieval_memory.query(user_input)
+            if retrieval_results:
+                formatted = "\n".join(
+                    f"- [{r['metadata'].get('layer', '')}] {r['text']} (score: {r['score']:.2f})"
+                    for r in retrieval_results
+                )
+                prompt_context["retrieval_results"] = formatted
+
+        # Stage 4: ReAct execution
         response = await self.react_loop.run(
             user_input=user_input,
             routing_decision=routing_decision,
             trace=trace,
         )
 
-        # Update short-term memory: record this turn so the next call
-        # has conversation context.
-        self.react_loop._conversation_history.append(
-            {"role": "user", "content": user_input}
-        )
-        self.react_loop._conversation_history.append(
-            {"role": "assistant", "content": response.answer}
-        )
+        # Update runtime memory with this turn
+        if self._runtime_memory:
+            await self._runtime_memory.add_message("user", user_input)
+            await self._runtime_memory.add_message("assistant", response.answer)
 
-        # Stage 4: Monitoring
+        # Archive: record assistant response
+        if self._archive_memory:
+            self._archive_memory.write_record({
+                "type": "message",
+                "role": "assistant",
+                "content": response.answer,
+            })
+
+        # Stage 5: Monitoring
         anomalies = self.anomaly_detector.detect(trace)
         quality = self.quality_scorer.score(trace)
 
-        # Stage 5: Memory updates
-        if self._episodic_store:
-            await self._episodic_store.write_after_task(
+        # Stage 6: Memory updates — episodic + profile
+        if self._retrieval_memory:
+            await self._retrieval_memory.write_episodic(
                 intent=routing_decision.intent.intent,
                 steps_summary=f"Executed {len(trace.spans)} operations",
                 result=response.answer,
-                user_feedback="",
+                success=True,
             )
 
-        # Feedback loop
+        # Feedback loop → profile avoidance hints
         for alert in anomalies:
             hint = self.feedback_loop.generate_avoidance_hint(
                 alert.alert_type, alert.details
             )
-            if self._user_profile:
-                self._user_profile.update_profile({"avoidance_hints": [hint]})
+            if self._profile_memory:
+                await self._profile_memory.add_avoidance_hint(hint)
 
         # Cleanup skills
         for skill_info in matched_skills:
