@@ -79,6 +79,12 @@ class RoutingConfig(BaseModel):
     )
     fast_path_confidence: float = Field(default=0.9, ge=0.0, le=1.0)
 
+    # Optional independent routing model — falls back to main model when unset
+    routing_provider: Optional[Literal["openai", "anthropic", "deepseek", "local"]] = None
+    routing_name: Optional[str] = None
+    routing_api_key: Optional[str] = Field(default=None, repr=False)
+    routing_base_url: Optional[str] = None
+
 
 class CheckpointConfig(BaseModel):
     """Checkpoint configuration."""

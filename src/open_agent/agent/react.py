@@ -150,6 +150,9 @@ class ReActLoop:
         # tool_use/tool_result message history (accumulated during loop)
         self._tool_messages: list[dict[str, Any]] = []
 
+        # Domain system prompt override from routing
+        self._domain_system_prompt: str | None = None
+
     # -- public API ----------------------------------------------------------
 
     async def run(
@@ -161,6 +164,11 @@ class ReActLoop:
         """Run the full ReAct loop for *user_input*."""
         state = AgentState()
         self._tool_messages = []
+        self._domain_system_prompt = (
+            routing_decision.domain.system_prompt
+            if routing_decision and routing_decision.domain and routing_decision.domain.system_prompt
+            else None
+        )
 
         root_span: Span | None = None
         if trace:
@@ -448,6 +456,9 @@ class ReActLoop:
 
         if self._prompt_builder is not None:
             system_content = self._prompt_builder.build(context=prompt_context)
+            # Inject domain system prompt from routing if available
+            if self._domain_system_prompt:
+                system_content = self._domain_system_prompt + "\n\n" + system_content
         else:
             system_content = "You are a helpful agent using the ReAct framework."
 

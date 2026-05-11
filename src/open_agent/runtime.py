@@ -59,14 +59,32 @@ class AgentRuntime(BaseComponent):
             workspace=self.config.workspace,
         )
 
+        # Model provider
+        self.provider = ProviderFactory.create(self.config.model)
+
+        # Routing provider — independent lightweight model for routing, or reuse main
+        routing_cfg = self.config.routing
+        if routing_cfg.routing_provider or routing_cfg.routing_name:
+            from open_agent.config import ModelConfig
+            routing_model_cfg = ModelConfig(
+                provider=routing_cfg.routing_provider or self.config.model.provider,
+                name=routing_cfg.routing_name or self.config.model.name,
+                temperature=0.0,
+                max_tokens=200,
+                api_key=routing_cfg.routing_api_key or self.config.model.api_key,
+                base_url=routing_cfg.routing_base_url or self.config.model.base_url,
+            )
+            self._routing_provider = ProviderFactory.create(routing_model_cfg)
+        else:
+            self._routing_provider = self.provider
+
         # Routing
         self.routing_pipeline = RoutingPipeline(
             complexity_method=self.config.routing.complexity_method,
             fast_path_confidence=self.config.routing.fast_path_confidence,
+            domains=self.config.routing.domains,
+            routing_provider=self._routing_provider,
         )
-
-        # Model provider
-        self.provider = ProviderFactory.create(self.config.model)
 
         # Memory — 4-layer architecture
         self.memory_factory = MemoryFactory(self.config.memory)
@@ -83,7 +101,7 @@ class AgentRuntime(BaseComponent):
             provider=self.provider,
             prompt_builder=self.prompt_builder,
         )
-        self.plan_generator = PlanGenerator()
+        self.plan_generator = PlanGenerator(provider=self.provider)
 
         # Safety
         self.safety_manager = SafetyManager(self.config.safety, self.config.workspace)
@@ -185,6 +203,20 @@ class AgentRuntime(BaseComponent):
         # Stage 1: Routing
         routing_decision = await self.routing_pipeline.route(user_input, trace=trace)
 
+        # 5.3 Missing slots clarification — return early without entering ReAct loop
+        if routing_decision.intent.missing_slots:
+            from open_agent.routing.intent import IntentParser
+            parser = IntentParser()
+            clarification = parser.generate_clarification(routing_decision.intent.missing_slots)
+            duration_ms = (time.time() - start_time) * 1000
+            return AgentResponse(
+                output=clarification,
+                trace_id=trace.trace_id,
+                routing=routing_decision,
+                duration_ms=duration_ms,
+                metadata={"clarification": True, "missing_slots": routing_decision.intent.missing_slots},
+            )
+
         # Stage 2: Skills matching
         matched_skills = self.skill_matcher.get_skills_for_prompt(
             routing_decision.domain.domain, user_input
@@ -195,6 +227,10 @@ class AgentRuntime(BaseComponent):
         prompt_context: dict[str, Any] = {
             "matched_skills": matched_skills,
         }
+
+        # 5.1 Inject domain system_prompt into prompt context
+        if routing_decision.domain.system_prompt:
+            prompt_context["domain_system_prompt"] = routing_decision.domain.system_prompt
         if self._profile_memory:
             profile_text = self._profile_memory.get_injection_text()
             if profile_text:
@@ -211,6 +247,15 @@ class AgentRuntime(BaseComponent):
                     for r in retrieval_results
                 )
                 prompt_context["retrieval_results"] = formatted
+
+        # 5.2 Planning: generate plan for complex tasks
+        if not routing_decision.skip_planning:
+            plan = await self.plan_generator.generate(user_input, trace=trace)
+            if plan.steps:
+                plan_text = "Generated plan:\n" + "\n".join(
+                    f"{i+1}. {step}" for i, step in enumerate(plan.steps)
+                )
+                prompt_context["plan"] = plan_text
 
         # Stage 4: ReAct execution
         response = await self.react_loop.run(

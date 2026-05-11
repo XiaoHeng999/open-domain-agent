@@ -47,7 +47,7 @@ class IntentParser(BaseComponent):
     def _parse_coding_intent(self, text: str) -> IntentResult:
         if any(kw in text for kw in ["debug", "fix", "bug", "修复", "调试"]):
             return IntentResult(intent="debug_code", slots={"query": text})
-        if any(kw in text for kw in ["review", "审查", "review"]):
+        if any(kw in text for kw in ["review", "审查"]):
             return IntentResult(intent="review_code", slots={"query": text})
         if any(kw in text for kw in ["implement", "create", "实现", "编写", "写"]):
             return IntentResult(intent="write_code", slots={"query": text})
