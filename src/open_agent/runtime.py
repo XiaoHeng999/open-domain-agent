@@ -27,6 +27,8 @@ from open_agent.sandbox.factory import SandboxFactory
 from open_agent.monitoring.collector import AnomalyDetector, QualityScorer, FeedbackLoop, TraceCollector
 from open_agent.checkpoint.manager import CheckpointManager
 from open_agent.prompt.builder import PromptBuilder
+from open_agent.hooks import HookEvent, HookManager
+from open_agent.hooks.builtin import welcome_hook, pre_check_hook, audit_hook
 
 
 @dataclass
@@ -163,6 +165,37 @@ class AgentRuntime(BaseComponent):
         self.react_loop._staleness_rounds = self.config.memory.todo_staleness_rounds
         self.react_loop._prompt_builder = self.prompt_builder
 
+        # Hooks — create HookManager and register built-in hooks
+        if self.config.hooks.enabled:
+            self._hook_manager = HookManager(enabled=True)
+            if self.config.hooks.welcome_enabled:
+                self._hook_manager.register(
+                    HookEvent.SESSION_START, welcome_hook, priority=10,
+                )
+            self._hook_manager.register(
+                HookEvent.TOOL_BEFORE, pre_check_hook, priority=10,
+            )
+            self._hook_manager.register(
+                HookEvent.TOOL_AFTER, audit_hook, priority=10,
+            )
+            self.react_loop._hook_manager = self._hook_manager
+
+            # Fire SESSION_START — inject welcome text into system prompt
+            session_results = await self._hook_manager.fire(
+                HookEvent.SESSION_START, {},
+            )
+            welcome_parts = [
+                hr.content for hr in session_results if hr.content
+            ]
+            if welcome_parts:
+                self._session_welcome = "\n".join(welcome_parts)
+                self.react_loop._session_welcome = self._session_welcome
+            else:
+                self._session_welcome = ""
+        else:
+            self._hook_manager = None
+            self._session_welcome = ""
+
         # Skills
         scan_builtin_skills(self.skill_registry)
         scan_workspace_skills(self.skill_registry, self.config.workspace)
@@ -227,6 +260,10 @@ class AgentRuntime(BaseComponent):
         prompt_context: dict[str, Any] = {
             "matched_skills": matched_skills,
         }
+
+        # Inject session welcome text from hooks
+        if getattr(self, "_session_welcome", ""):
+            prompt_context["session_welcome"] = self._session_welcome
 
         # 5.1 Inject domain system_prompt into prompt context
         if routing_decision.domain.system_prompt:

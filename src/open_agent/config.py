@@ -111,6 +111,13 @@ class ToolsConfig(BaseModel):
     max_tool_result_tokens: int = Field(default=2000, ge=100)
 
 
+class HooksConfig(BaseModel):
+    """Hook system configuration."""
+
+    enabled: bool = True
+    welcome_enabled: bool = True
+
+
 class AgentConfig(BaseModel):
     """Top-level agent configuration."""
 
@@ -122,6 +129,7 @@ class AgentConfig(BaseModel):
     checkpoint: CheckpointConfig = Field(default_factory=CheckpointConfig)
     trace: TraceConfig = Field(default_factory=TraceConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    hooks: HooksConfig = Field(default_factory=HooksConfig)
 
     workspace: str = "."
 

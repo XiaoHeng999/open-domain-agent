@@ -22,6 +22,8 @@ from open_agent.registry import ToolRegistry
 from open_agent.routing.router import RoutingDecision
 from open_agent.trace import Span, SpanKind, Trace
 
+from open_agent.hooks import HookEvent, HookManager
+
 logger = logging.getLogger("open_agent")
 
 
@@ -135,6 +137,7 @@ class ReActLoop:
         runtime_memory: Any = None,
         todo_manager: Any = None,
         staleness_rounds: int = 3,
+        hook_manager: HookManager | None = None,
     ) -> None:
         self._registry = tool_registry
         self._max_iterations = max_iterations
@@ -143,6 +146,7 @@ class ReActLoop:
         self._runtime_memory = runtime_memory
         self._todo_manager = todo_manager
         self._staleness_rounds = staleness_rounds
+        self._hook_manager = hook_manager
         # Backward compat: internal conversation history when no RuntimeMemory
         self._conversation_history: list[dict[str, str]] = []
         # Injected externally by AgentRuntime
@@ -152,6 +156,9 @@ class ReActLoop:
 
         # Domain system prompt override from routing
         self._domain_system_prompt: str | None = None
+
+        # Session welcome text injected by hooks
+        self._session_welcome: str = ""
 
     # -- public API ----------------------------------------------------------
 
@@ -353,7 +360,41 @@ class ReActLoop:
         # Staleness reminder injection
         staleness_prefix = self._check_staleness()
 
+        # --- TOOL_BEFORE hooks ---
+        hook_prefix = ""
+        if self._hook_manager is not None:
+            before_ctx: dict[str, Any] = {
+                "tool_name": action.tool_name,
+                "args": action.args,
+            }
+            before_results = await self._hook_manager.fire(
+                HookEvent.TOOL_BEFORE, before_ctx,
+            )
+            for hr in before_results:
+                if hr.blocked:
+                    content = hr.content or "Blocked by hook"
+                    if staleness_prefix:
+                        content = staleness_prefix + content
+                    if span:
+                        span.set_attribute("success", False)
+                        span.set_attribute("blocked", True)
+                        span.finish()
+                    return Observation(
+                        content=content,
+                        tool_name=action.tool_name,
+                        tool_use_id=action.tool_use_id,
+                        success=False,
+                        step_index=iteration,
+                    )
+                if hr.content:
+                    hook_prefix += hr.content + "\n"
+
+        start_time = None
         try:
+            if self._hook_manager is not None:
+                import time as _time
+                start_time = _time.monotonic()
+
             if self._registry.has(action.tool_name):
                 result = await self._registry.execute(action.tool_name, action.args)
                 content = str(result)
@@ -372,15 +413,57 @@ class ReActLoop:
             else:
                 content = f"Tool not found: {action.tool_name}"
                 success = False
+
         except ToolError as exc:
-            content = f"Tool error: {exc}"
             success = False
+            # --- Recovery integration ---
+            recovery_trace = await self._try_recover(exc, action)
+            if recovery_trace is not None and recovery_trace.final_status.value == "success":
+                last_attempt = recovery_trace.attempts[-1]
+                content = str(last_attempt.data.get("result", last_attempt.message))
+                success = True
+            else:
+                content = f"Tool error: {exc}"
+                if recovery_trace is not None:
+                    trace_summary = ", ".join(
+                        f"{a.strategy_name}({a.status.value})"
+                        for a in recovery_trace.attempts
+                    )
+                    content += f"\nRecovery trace: [{trace_summary}]"
+
         except Exception as exc:
             content = f"Execution error: {exc}"
             success = False
 
+        # --- TOOL_AFTER hooks ---
+        hook_suffix = ""
+        if self._hook_manager is not None:
+            duration_ms = 0.0
+            if start_time is not None:
+                import time as _time
+                duration_ms = (_time.monotonic() - start_time) * 1000
+            after_ctx: dict[str, Any] = {
+                "tool_name": action.tool_name,
+                "success": success,
+                "duration_ms": duration_ms,
+            }
+            after_results = await self._hook_manager.fire(
+                HookEvent.TOOL_AFTER, after_ctx,
+            )
+            for hr in after_results:
+                if hr.content:
+                    hook_suffix += "\n" + hr.content
+
+        # Assemble final content
+        parts: list[str] = []
         if staleness_prefix:
-            content = staleness_prefix + content
+            parts.append(staleness_prefix)
+        if hook_prefix:
+            parts.append(hook_prefix)
+        parts.append(content)
+        if hook_suffix:
+            parts.append(hook_suffix)
+        content = "".join(parts)
 
         if span:
             span.set_attribute("success", success)
@@ -395,6 +478,27 @@ class ReActLoop:
         )
 
     # -- helpers -------------------------------------------------------------
+
+    async def _try_recover(
+        self,
+        error: ToolError,
+        action: Action,
+    ) -> Any:
+        """Attempt recovery via the recovery chain. Returns RecoveryTrace or None."""
+        try:
+            from open_agent.recovery import execute_recovery_chain
+        except ImportError:
+            return None
+
+        context: dict[str, Any] = {
+            "tool_registry": self._registry,
+            "args": action.args,
+        }
+        tool = self._registry.get(action.tool_name)
+        if tool is not None:
+            context["tool_handler"] = tool.execute
+
+        return await execute_recovery_chain(error, context)
 
     def _check_staleness(self) -> str:
         """Return staleness reminder if todo hasn't been updated recently."""
@@ -458,6 +562,10 @@ class ReActLoop:
             system_content = self._prompt_builder.build(context=prompt_context)
             # Inject domain system prompt from routing if available
             if self._domain_system_prompt:
+                system_content = self._domain_system_prompt + "\n\n" + system_content
+            # Inject session welcome text from hooks
+            if self._session_welcome:
+                system_content = system_content + "\n\n" + self._session_welcome
                 system_content = self._domain_system_prompt + "\n\n" + system_content
         else:
             system_content = "You are a helpful agent using the ReAct framework."
