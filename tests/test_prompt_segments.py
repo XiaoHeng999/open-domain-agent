@@ -44,17 +44,24 @@ class TestToolListSegment:
         assert result == ""
 
     def test_with_tools(self):
+        from open_agent.tools.base import FunctionTool
         registry = ToolRegistry()
-        registry.register("read_file", handler=lambda: None, description="Read a file")
+        registry.register(FunctionTool(
+            name="read_file",
+            description="Read a file",
+            parameters={"type": "object", "properties": {}},
+            handler=lambda: None,
+        ))
         seg = ToolListSegment(tool_registry=registry)
         result = seg.build({})
         assert "<tool_list>" in result
         assert "read_file" in result
 
     def test_tag_filter(self):
+        from open_agent.tools.base import FunctionTool
         registry = ToolRegistry()
-        registry.register("tool_a", handler=lambda: None, description="A", tags=["coding"])
-        registry.register("tool_b", handler=lambda: None, description="B", tags=["web"])
+        registry.register(FunctionTool(name="tool_a", description="A", parameters={"type": "object", "properties": {}}, handler=lambda: None), tags=["coding"])
+        registry.register(FunctionTool(name="tool_b", description="B", parameters={"type": "object", "properties": {}}, handler=lambda: None), tags=["web"])
         seg = ToolListSegment(tool_registry=registry, tool_filter=["coding"])
         result = seg.build({})
         assert "tool_a" in result

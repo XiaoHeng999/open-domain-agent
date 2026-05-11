@@ -123,23 +123,37 @@ class TestProviderFactory:
 
 # --- Registry tests ---
 
+def _make_tool(name: str, tags: list[str] | None = None, server_id: str | None = None):
+    """Helper to create a FunctionTool for testing."""
+    from open_agent.tools.base import FunctionTool
+    tool = FunctionTool(
+        name=name,
+        description=f"Tool {name}",
+        parameters={"type": "object", "properties": {}},
+        handler=lambda: "ok",
+    )
+    if server_id:
+        tool._server_id = server_id
+    return tool
+
+
 class TestToolRegistry:
     def test_register_and_get(self):
         reg = ToolRegistry()
-        reg.register("test_tool", handler=lambda: None, description="A test tool")
-        entry = reg.get("test_tool")
-        assert entry.name == "test_tool"
-        assert entry.description == "A test tool"
+        reg.register(_make_tool("test_tool"))
+        tool = reg.get("test_tool")
+        assert tool.name == "test_tool"
+        assert tool.description == "Tool test_tool"
 
     def test_duplicate_register(self):
         reg = ToolRegistry()
-        reg.register("t1", handler=lambda: None)
+        reg.register(_make_tool("t1"))
         with pytest.raises(ValueError, match="already registered"):
-            reg.register("t1", handler=lambda: None)
+            reg.register(_make_tool("t1"))
 
     def test_unregister(self):
         reg = ToolRegistry()
-        reg.register("t1", handler=lambda: None)
+        reg.register(_make_tool("t1"))
         reg.unregister("t1")
         assert not reg.has("t1")
 
@@ -150,34 +164,34 @@ class TestToolRegistry:
 
     def test_list_by_tag(self):
         reg = ToolRegistry()
-        reg.register("t1", handler=lambda: None, tags=["search"])
-        reg.register("t2", handler=lambda: None, tags=["code"])
-        reg.register("t3", handler=lambda: None, tags=["search", "web"])
+        reg.register(_make_tool("t1"), tags=["search"])
+        reg.register(_make_tool("t2"), tags=["code"])
+        reg.register(_make_tool("t3"), tags=["search", "web"])
         assert len(reg.list_by_tag("search")) == 2
 
     def test_unregister_by_server(self):
         reg = ToolRegistry()
-        reg.register("t1", handler=lambda: None, server_id="s1")
-        reg.register("t2", handler=lambda: None, server_id="s1")
-        reg.register("t3", handler=lambda: None, server_id="s2")
+        reg.register(_make_tool("t1", server_id="s1"))
+        reg.register(_make_tool("t2", server_id="s1"))
+        reg.register(_make_tool("t3", server_id="s2"))
         removed = reg.unregister_by_server("s1")
         assert removed == 2
         assert len(reg) == 1
 
     def test_snapshot(self):
         reg = ToolRegistry()
-        reg.register("t1", handler=lambda: None)
-        reg.register("t2", handler=lambda: None)
+        reg.register(_make_tool("t1"))
+        reg.register(_make_tool("t2"))
         snap = reg.snapshot()
         assert isinstance(snap, frozenset)
         assert snap == frozenset(["t1", "t2"])
 
     def test_restore(self):
         reg = ToolRegistry()
-        reg.register("t1", handler=lambda: None)
-        reg.register("t2", handler=lambda: None)
+        reg.register(_make_tool("t1"))
+        reg.register(_make_tool("t2"))
         snap = reg.snapshot()
-        reg.register("t3", handler=lambda: None)
+        reg.register(_make_tool("t3"))
         assert len(reg) == 3
         reg.restore(snap)
         assert len(reg) == 2
@@ -187,9 +201,9 @@ class TestToolRegistry:
 
     def test_filter_by_tags(self):
         reg = ToolRegistry()
-        reg.register("t1", handler=lambda: None, tags=["coding", "file"])
-        reg.register("t2", handler=lambda: None, tags=["web"])
-        reg.register("t3", handler=lambda: None, tags=["coding"])
+        reg.register(_make_tool("t1"), tags=["coding", "file"])
+        reg.register(_make_tool("t2"), tags=["web"])
+        reg.register(_make_tool("t3"), tags=["coding"])
         result = reg.filter_by_tags(["coding"])
         names = [t.name for t in result]
         assert "t1" in names
@@ -198,8 +212,8 @@ class TestToolRegistry:
 
     def test_filter_by_tags_multiple(self):
         reg = ToolRegistry()
-        reg.register("t1", handler=lambda: None, tags=["coding"])
-        reg.register("t2", handler=lambda: None, tags=["web"])
+        reg.register(_make_tool("t1"), tags=["coding"])
+        reg.register(_make_tool("t2"), tags=["web"])
         result = reg.filter_by_tags(["coding", "web"])
         assert len(result) == 2
 
@@ -279,6 +293,7 @@ class TestToolSchema:
         assert search._tool_schema["name"] == "web_search"
 
     def test_registry_with_decorated(self):
+        from open_agent.tools.base import FunctionTool
         reg = ToolRegistry()
 
         @tool_schema
@@ -286,9 +301,16 @@ class TestToolSchema:
             """Search."""
             ...
 
-        reg.register("search", handler=search)
-        entry = reg.get("search")
-        assert entry.schema["name"] == "search"
+        schema = search._tool_schema
+        tool = FunctionTool(
+            name=schema["name"],
+            description=schema.get("description", ""),
+            parameters=schema.get("inputSchema", {"type": "object", "properties": {}}),
+            handler=search,
+        )
+        reg.register(tool)
+        t = reg.get("search")
+        assert t.name == "search"
 
 
 # --- Fallback tests ---

@@ -90,6 +90,9 @@ class ToolListSegment(PromptSegment):
         self._tool_filter = tool_filter
 
     def build(self, context: dict[str, Any]) -> str:
+        # With Tool ABC, tools are registered via ToolRegistry with Tool instances.
+        # ToolListSegment now provides a lightweight summary since full schemas
+        # are passed via the API tools parameter.
         if self._tool_filter:
             tools = self._registry.filter_by_tags(self._tool_filter)
         else:
@@ -100,13 +103,23 @@ class ToolListSegment(PromptSegment):
 
         entries: list[str] = []
         for tool in tools:
-            schema = tool.schema
-            params = schema.get("inputSchema", schema).get("properties", {})
+            # Support both old ToolEntry (schema attr) and new Tool ABC (parameters attr)
+            if hasattr(tool, "parameters"):
+                # Tool ABC instance
+                name = tool.name
+                desc = tool.description
+                params = tool.parameters.get("properties", {})
+            else:
+                # Legacy ToolEntry
+                schema = tool.schema
+                name = tool.name
+                desc = tool.description
+                params = schema.get("inputSchema", schema).get("properties", {})
             param_str = json.dumps(params, ensure_ascii=False) if params else "none"
             entries.append(
                 _p.TOOL_ENTRY_TEMPLATE.format(
-                    name=tool.name,
-                    description=tool.description or "(no description)",
+                    name=name,
+                    description=desc or "(no description)",
                     parameters=param_str,
                 )
             )

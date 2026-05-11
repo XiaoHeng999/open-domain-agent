@@ -1,11 +1,17 @@
 """Model interface and ProviderFactory — config-driven LLM provider creation."""
-
 from __future__ import annotations
 
+import json
+import logging
+import re
+import warnings
 from typing import Any
 
 from open_agent.base import ModelProvider
 from open_agent.config import ModelConfig
+from open_agent.types import ToolCall, ToolCallResponse
+
+logger = logging.getLogger("open_agent")
 
 
 class ProviderFactory:
@@ -64,9 +70,11 @@ class OpenAIProvider(ModelProvider):
     async def complete_structured(
         self, messages: list[dict[str, Any]], schema: dict[str, Any], **kwargs: Any
     ) -> dict[str, Any]:
-        import json
-        import re
-
+        warnings.warn(
+            "complete_structured is deprecated, use complete_with_tools instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         response = await self._client.chat.completions.create(
             model=self.config.name,
             messages=messages,
@@ -74,15 +82,12 @@ class OpenAIProvider(ModelProvider):
             response_format={"type": "json_object"},
         )
         text = response.choices[0].message.content or ""
-        # Strip markdown code fences if the model wraps output
         text = re.sub(r"^```(?:json)?\s*", "", text.strip())
         text = re.sub(r"\s*```$", "", text)
-        # Remove trailing commas before } or ] (common LLM mistake)
         text = re.sub(r",\s*([}\]])", r"\1", text)
         try:
             return json.loads(text)
         except json.JSONDecodeError:
-            # Fallback: extract first {...} or [...] block
             for start_ch, end_ch in [("{", "}"), ("[", "]")]:
                 start = text.find(start_ch)
                 if start != -1:
@@ -93,6 +98,47 @@ class OpenAIProvider(ModelProvider):
                         except json.JSONDecodeError:
                             continue
             raise
+
+    async def complete_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        tool_definitions: list[dict[str, Any]],
+        **kwargs: Any,
+    ) -> ToolCallResponse:
+        """Call OpenAI API with function-calling tools."""
+        openai_tools = _anthropic_to_openai_tools(tool_definitions)
+        response = await self._client.chat.completions.create(
+            model=self.config.name,
+            messages=messages,
+            tools=openai_tools,
+            temperature=kwargs.get("temperature", self.config.temperature),
+            max_tokens=kwargs.get("max_tokens", self.config.max_tokens),
+        )
+
+        choice = response.choices[0]
+        message = choice.message
+        text = message.content or ""
+        tool_calls: list[ToolCall] = []
+
+        if message.tool_calls:
+            for tc in message.tool_calls:
+                try:
+                    args = json.loads(tc.function.arguments)
+                except json.JSONDecodeError:
+                    args = {}
+                tool_calls.append(ToolCall(
+                    id=tc.id,
+                    name=tc.function.name,
+                    input=args,
+                ))
+
+        stop_reason = "tool_use" if tool_calls else "end_turn"
+        return ToolCallResponse(
+            text=text,
+            tool_calls=tool_calls,
+            stop_reason=stop_reason,
+            raw_response=response,
+        )
 
 
 class AnthropicProvider(ModelProvider):
@@ -133,13 +179,59 @@ class AnthropicProvider(ModelProvider):
     async def complete_structured(
         self, messages: list[dict[str, Any]], schema: dict[str, Any], **kwargs: Any
     ) -> dict[str, Any]:
-        import json
-
+        warnings.warn(
+            "complete_structured is deprecated, use complete_with_tools instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         text = await self.complete(
             messages + [{"role": "user", "content": "Respond in valid JSON."}],
             **kwargs,
         )
         return json.loads(text)
+
+    async def complete_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        tool_definitions: list[dict[str, Any]],
+        **kwargs: Any,
+    ) -> ToolCallResponse:
+        """Call Anthropic API with native tool_use support."""
+        system = None
+        user_messages = []
+        for m in messages:
+            if m["role"] == "system":
+                system = m["content"]
+            else:
+                user_messages.append(m)
+
+        response = await self._client.messages.create(
+            model=self.config.name,
+            max_tokens=kwargs.get("max_tokens", self.config.max_tokens),
+            system=system or "",
+            messages=user_messages,
+            tools=tool_definitions,
+        )
+
+        text_parts: list[str] = []
+        tool_calls: list[ToolCall] = []
+
+        for block in response.content:
+            if block.type == "text":
+                text_parts.append(block.text)
+            elif block.type == "tool_use":
+                tool_calls.append(ToolCall(
+                    id=block.id,
+                    name=block.name,
+                    input=block.input,
+                ))
+
+        return ToolCallResponse(
+            text="\n".join(text_parts),
+            tool_calls=tool_calls,
+            stop_reason=response.stop_reason or "end_turn",
+            raw_response=response,
+        )
 
 
 class DeepSeekProvider(OpenAIProvider):
@@ -163,7 +255,29 @@ class LocalProvider(ModelProvider):
     async def complete_structured(
         self, messages: list[dict[str, Any]], schema: dict[str, Any], **kwargs: Any
     ) -> dict[str, Any]:
+        warnings.warn(
+            "complete_structured is deprecated, use complete_with_tools instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         return {"result": "stub"}
+
+
+def _anthropic_to_openai_tools(
+    anthropic_tools: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Convert Anthropic tool_use format to OpenAI function-calling format."""
+    openai_tools = []
+    for t in anthropic_tools:
+        openai_tools.append({
+            "type": "function",
+            "function": {
+                "name": t["name"],
+                "description": t.get("description", ""),
+                "parameters": t.get("input_schema", {}),
+            },
+        })
+    return openai_tools
 
 
 # Register built-in providers

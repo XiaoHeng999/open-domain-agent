@@ -1,96 +1,71 @@
-"""Dynamic ToolRegistry — runtime register / unregister / list / list_by_tag."""
+"""ToolRegistry v2 — backed by Tool ABC instances.
 
+Supports:
+- register/unregister/get/has/snapshot/restore (preserved from v1)
+- execute(name, params): async 3-stage pipeline (cast → validate → safety → execute → truncate)
+- get_definitions(): Anthropic tool_use format output for all registered tools
+- scan_builtin_tools(): auto-discover and register built-in tools
+"""
 from __future__ import annotations
 
+import importlib
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from open_agent.tools.base import FunctionTool, Tool
 
-@dataclass
-class ToolEntry:
-    """A registered tool with its schema, implementation, and metadata."""
-
-    name: str
-    schema: dict[str, Any]
-    handler: Callable[..., Any]
-    tags: list[str] = field(default_factory=list)
-    server_id: str | None = None
-    description: str = ""
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "name": self.name,
-            "description": self.description,
-            "tags": self.tags,
-            "schema": self.schema,
-        }
+logger = logging.getLogger("open_agent")
 
 
 class ToolRegistry:
-    """Dynamic tool registry — supports runtime register/unregister/list."""
+    """Dynamic tool registry — supports runtime register/unregister/list/execute."""
 
-    def __init__(self) -> None:
-        self._tools: dict[str, ToolEntry] = {}
-
-    def register(
+    def __init__(
         self,
-        name: str,
-        handler: Callable[..., Any],
-        schema: dict[str, Any] | None = None,
-        tags: list[str] | None = None,
-        server_id: str | None = None,
-        description: str = "",
-    ) -> ToolEntry:
-        """Register a tool. Schema is auto-derived from @tool_schema if available."""
-        if name in self._tools:
-            raise ValueError(f"Tool already registered: {name}")
+        safety_manager: Any = None,
+        max_tool_result_tokens: int = 2000,
+    ) -> None:
+        self._tools: dict[str, Tool] = {}
+        self._tags: dict[str, list[str]] = {}
+        self._safety_manager = safety_manager
+        self._max_tool_result_tokens = max_tool_result_tokens
 
-        if schema is None and hasattr(handler, "_tool_schema"):
-            schema = handler._tool_schema
-        elif schema is None:
-            schema = {
-                "name": name,
-                "description": description or getattr(handler, "__doc__", "") or "",
-                "inputSchema": {"type": "object", "properties": {}},
-            }
-
-        entry = ToolEntry(
-            name=name,
-            schema=schema,
-            handler=handler,
-            tags=tags or [],
-            server_id=server_id,
-            description=description or schema.get("description", ""),
-        )
-        self._tools[name] = entry
-        return entry
+    def register(self, tool: Tool, tags: list[str] | None = None) -> None:
+        """Register a Tool ABC instance."""
+        if tool.name in self._tools:
+            raise ValueError(f"Tool already registered: {tool.name}")
+        self._tools[tool.name] = tool
+        self._tags[tool.name] = tags or []
 
     def unregister(self, name: str) -> None:
         """Remove a single tool by name."""
         if name not in self._tools:
             raise KeyError(f"Tool not found: {name}")
         del self._tools[name]
+        self._tags.pop(name, None)
 
     def unregister_by_server(self, server_id: str) -> int:
         """Remove all tools from a specific MCP server. Returns count removed."""
-        to_remove = [n for n, t in self._tools.items() if t.server_id == server_id]
+        to_remove = [
+            n for n, t in self._tools.items()
+            if getattr(t, "_server_id", None) == server_id
+        ]
         for name in to_remove:
             del self._tools[name]
+            self._tags.pop(name, None)
         return len(to_remove)
 
-    def get(self, name: str) -> ToolEntry:
+    def get(self, name: str) -> Tool:
         if name not in self._tools:
             raise KeyError(f"Tool not found: {name}")
         return self._tools[name]
 
-    def list_tools(self) -> list[ToolEntry]:
-        return list(self._tools.values())
-
-    def list_by_tag(self, tag: str) -> list[ToolEntry]:
-        return [t for t in self._tools.values() if tag in t.tags]
-
     def has(self, name: str) -> bool:
         return name in self._tools
+
+    def list_tools(self) -> list[Tool]:
+        return list(self._tools.values())
 
     def __len__(self) -> int:
         return len(self._tools)
@@ -98,7 +73,20 @@ class ToolRegistry:
     def __contains__(self, name: str) -> bool:
         return name in self._tools
 
-    # ── Snapshot / Restore / Filter ──
+    def list_by_tag(self, tag: str) -> list[Tool]:
+        return [
+            t for n, t in self._tools.items()
+            if tag in self._tags.get(n, [])
+        ]
+
+    def filter_by_tags(self, tags: list[str]) -> list[Tool]:
+        """Return tools matching *any* of the given tags."""
+        return [
+            t for n, t in self._tools.items()
+            if any(tag in self._tags.get(n, []) for tag in tags)
+        ]
+
+    # ── Snapshot / Restore ──
 
     def snapshot(self) -> frozenset[str]:
         """Return a snapshot of current tool names."""
@@ -109,7 +97,117 @@ class ToolRegistry:
         current = set(self._tools.keys())
         for name in current - snapshot:
             del self._tools[name]
+            self._tags.pop(name, None)
 
-    def filter_by_tags(self, tags: list[str]) -> list[ToolEntry]:
-        """Return tools matching *any* of the given tags."""
-        return [t for t in self._tools.values() if any(tag in t.tags for tag in tags)]
+    # ── Execution pipeline ──
+
+    async def execute(self, name: str, params: dict[str, Any]) -> str:
+        """Execute a tool through the full pipeline: cast → validate → safety → execute → truncate."""
+        if name not in self._tools:
+            return f"Error: Tool not found: {name}"
+
+        tool = self._tools[name]
+
+        # Stage 1: cast_params
+        try:
+            params = tool.cast_params(params)
+        except Exception as exc:
+            return f"Error: Parameter cast failed: {exc}"
+
+        # Stage 2: validate_params
+        errors = tool.validate_params(params)
+        if errors:
+            return f"Error: Validation failed: {'; '.join(errors)}"
+
+        # Stage 3: safety checks
+        if self._safety_manager is not None:
+            safety_error = self._run_safety_checks(tool, params)
+            if safety_error:
+                return safety_error
+
+        # Stage 4: execute
+        try:
+            result = tool.execute(**params)
+            if hasattr(result, "__await__"):
+                result = await result
+            result = str(result)
+        except Exception as exc:
+            result = f"Error: {exc}"
+
+        # Stage 5: truncate
+        result = self._truncate_result(result)
+
+        return result
+
+    def _run_safety_checks(
+        self, tool: Tool, params: dict[str, Any],
+    ) -> str | None:
+        """Run safety checks for the tool. Returns error string or None."""
+        for check_type in tool.safety_checks:
+            if check_type == "command":
+                command = params.get("command", "")
+                result = self._safety_manager.check_command(command)
+                if not result.safe:
+                    return f"Error: Command blocked by safety policy: {result.reason}"
+            elif check_type == "url":
+                url = params.get("url", "")
+                result = self._safety_manager.check_url(url)
+                if not result.safe:
+                    return f"Error: URL blocked by safety policy: {result.reason}"
+            elif check_type == "path":
+                path = params.get("path", "")
+                allow_write = not tool.read_only
+                result = self._safety_manager.check_path(path, allow_write=allow_write)
+                if not result.safe:
+                    return f"Error: Path blocked by safety policy: {result.reason}"
+        return None
+
+    def _truncate_result(self, result: str) -> str:
+        """Truncate result based on max_tool_result_tokens config."""
+        max_chars = self._max_tool_result_tokens * 4
+        if len(result) > max_chars:
+            return result[:max_chars] + f"\n...[truncated, {len(result)} chars total]"
+        return result
+
+    # ── Schema export ──
+
+    def get_definitions(self) -> list[dict[str, Any]]:
+        """Return all registered tools' to_schema() output (Anthropic tool_use format)."""
+        return [tool.to_schema() for tool in self._tools.values()]
+
+
+def scan_builtin_tools(registry: ToolRegistry, config: Any) -> None:
+    """Auto-discover and register all built-in tools.
+
+    Imports tool modules from open_agent.tools and registers Tool subclasses.
+    Conditional registration based on config (e.g. exec enable, API keys).
+    """
+    # Filesystem tools
+    from open_agent.tools.filesystem import (
+        EditFileTool, ListDirTool, ReadFileTool, WriteFileTool,
+    )
+    workspace = getattr(config, "workspace", ".")
+    registry.register(ReadFileTool(workspace=workspace))
+    registry.register(WriteFileTool(workspace=workspace))
+    registry.register(EditFileTool(workspace=workspace))
+    registry.register(ListDirTool(workspace=workspace))
+
+    # Shell tool — conditional on exec_config.enable
+    exec_enabled = getattr(
+        getattr(config, "tools", None), "exec_enabled", True,
+    )
+    if exec_enabled:
+        from open_agent.tools.shell import ExecTool
+        registry.register(ExecTool(workspace=workspace))
+
+    # Web tools
+    from open_agent.tools.web import WebFetchTool, WebSearchTool
+    api_key = getattr(
+        getattr(config, "tools", None), "brave_search_api_key", None,
+    )
+    registry.register(WebSearchTool(api_key=api_key))
+    registry.register(WebFetchTool())
+
+    # Todo tool
+    from open_agent.tools.todo import TodoTool
+    registry.register(TodoTool())

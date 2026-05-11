@@ -1,9 +1,12 @@
-"""Decorators — @tool_schema auto-generates MCP-compatible JSON Schema."""
+"""Decorators — @tool_schema auto-generates MCP-compatible JSON Schema.
 
+Deprecated: Use Tool ABC subclass instead of @tool_schema for new tools.
+"""
 from __future__ import annotations
 
 import inspect
 import re
+import warnings
 from typing import Any, Callable, get_type_hints
 
 # Map Python types to JSON Schema types
@@ -36,6 +39,11 @@ def tool_schema(func: Callable | None = None, *, name: str | None = None, descri
     """
 
     def decorator(fn: Callable) -> Callable:
+        warnings.warn(
+            "@tool_schema is deprecated — use Tool ABC subclass instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         schema = _build_schema(fn, tool_name=name, tool_desc=description)
         fn._tool_schema = schema
         fn._is_tool = True

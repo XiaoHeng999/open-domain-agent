@@ -13,6 +13,7 @@ from open_agent.errors import (
     ServiceError,
     ToolError,
 )
+from open_agent.tools.base import FunctionTool
 from open_agent.registry import ToolRegistry
 from open_agent.recovery.classifier import ErrorClassifier, ToolErrorType
 from open_agent.recovery.engine import (
@@ -256,13 +257,21 @@ class TestServiceRecoveryStrategy:
         """When retries fail, strategy looks for a fallback tool in registry."""
         registry = ToolRegistry()
         registry.register(
-            "primary",
-            handler=lambda: (_ for _ in ()).throw(ServiceError("down")),
+            FunctionTool(
+                name="primary",
+                description="Primary tool",
+                parameters={"type": "object", "properties": {}},
+                handler=lambda: (_ for _ in ()).throw(ServiceError("down")),
+            ),
             tags=["primary"],
         )
         registry.register(
-            "fallback_search",
-            handler=lambda: "fallback_ok",
+            FunctionTool(
+                name="fallback_search",
+                description="Fallback search",
+                parameters={"type": "object", "properties": {}},
+                handler=lambda: "fallback_ok",
+            ),
             tags=["fallback"],
         )
 

@@ -167,14 +167,32 @@ def trace(
 @app.command(name="tool")
 def tool_group(
     action: str = typer.Argument("list", help="Action: list"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Config YAML path"),
 ) -> None:
     """Manage tools (list registered tools)."""
     if action == "list":
+        from open_agent.registry import ToolRegistry
+        from open_agent.config import load_config as load_agent_config
+
+        cfg = load_agent_config(config)
+        registry = ToolRegistry()
+        from open_agent.registry import scan_builtin_tools
+        scan_builtin_tools(registry, cfg)
+
         table = Table(title="Registered Tools")
         table.add_column("Name", style="cyan")
         table.add_column("Description")
-        table.add_column("Tags")
-        table.add_row("(no tools registered)", "-", "-")
+        table.add_column("Read-only")
+        table.add_column("Safety")
+
+        for tool in registry.list_tools():
+            table.add_row(
+                tool.name,
+                tool.description[:60] + ("..." if len(tool.description) > 60 else ""),
+                "Yes" if tool.read_only else "No",
+                ", ".join(tool.safety_checks) if tool.safety_checks else "-",
+            )
+
         console.print(table)
     else:
         console.print(f"[red]Unknown action: {action}[/red]")

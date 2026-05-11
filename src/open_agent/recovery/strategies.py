@@ -299,9 +299,7 @@ class ServiceRecoveryStrategy(RecoveryStrategy):
             fallback_tools = registry.list_by_tag("fallback")
             for entry in fallback_tools:
                 try:
-                    result = entry.handler(**args)
-                    if asyncio.iscoroutine(result):
-                        result = await result
+                    result = await entry.execute(**args)
                     return RecoveryResult(
                         status=RecoveryStatus.SUCCESS,
                         error_type="service_error",

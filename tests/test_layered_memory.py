@@ -569,20 +569,15 @@ class TestIntegration:
     def test_todo_tool_registered_and_callable(self):
         """Todo tool can be registered and called through ToolRegistry."""
         from open_agent.registry import ToolRegistry
-        from open_agent.tools.todo import todo_handler, TODO_TOOL_SCHEMA, TodoManager
-
-        registry = ToolRegistry()
-        registry.register(
-            name="todo",
-            handler=todo_handler,
-            schema=TODO_TOOL_SCHEMA,
-            description="Task plan manager",
-        )
+        from open_agent.tools.todo import TodoTool, TodoManager
 
         tm = TodoManager()
-        entry = registry.get("todo")
-        result = entry.handler(
-            items=[{"content": "Step 1", "status": "pending"}],
-            _todo_manager=tm,
+        registry = ToolRegistry()
+        registry.register(TodoTool(todo_manager=tm))
+
+        tool = registry.get("todo")
+        import asyncio
+        result = asyncio.get_event_loop().run_until_complete(
+            tool.execute(items=[{"content": "Step 1", "status": "pending"}])
         )
         assert "[ ] Step 1" in result

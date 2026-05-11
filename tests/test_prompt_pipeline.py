@@ -7,6 +7,7 @@ import pytest
 from open_agent.prompt.builder import PromptBuilder
 from open_agent.prompt.segments import SegmentType
 from open_agent.registry import ToolRegistry
+from open_agent.tools.base import FunctionTool
 
 
 class TestPromptBuilderBuild:
@@ -26,8 +27,14 @@ class TestPromptBuilderBuild:
         assert "<dynamic_env>" in result
 
     def test_build_with_tools(self):
+        from open_agent.tools.base import FunctionTool
         registry = ToolRegistry()
-        registry.register("test_tool", handler=lambda x: x, description="A test tool", tags=["test"])
+        registry.register(FunctionTool(
+            name="test_tool",
+            description="A test tool",
+            parameters={"type": "object", "properties": {"x": {"type": "string"}}},
+            handler=lambda x: x,
+        ), tags=["test"])
         builder = PromptBuilder(tool_registry=registry)
         result = builder.build()
         assert "<tool_list>" in result
@@ -96,7 +103,7 @@ class TestPromptBuilderTokenEstimation:
 
     def test_token_budget_truncation(self):
         registry = ToolRegistry()
-        registry.register("tool1", handler=lambda: None, description="Tool one")
+        registry.register(FunctionTool(name="tool1", description="Tool one", parameters={"type": "object", "properties": {}}, handler=lambda: None))
         builder = PromptBuilder(tool_registry=registry, token_budget=5)
         result = builder.build()
         # Very small budget should truncate to just core identity or empty
@@ -106,7 +113,7 @@ class TestPromptBuilderTokenEstimation:
 class TestSegmentSeparator:
     def test_segments_separated_by_separator(self):
         registry = ToolRegistry()
-        registry.register("t1", handler=lambda: None, description="T1")
+        registry.register(FunctionTool(name="t1", description="T1", parameters={"type": "object", "properties": {}}, handler=lambda: None))
         builder = PromptBuilder(tool_registry=registry)
         result = builder.build()
         assert "---" in result

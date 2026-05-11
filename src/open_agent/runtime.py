@@ -117,19 +117,33 @@ class AgentRuntime(BaseComponent):
         self._archive_memory = self.memory_factory.create_archive_memory()
         self._todo_manager = TodoManager()
 
-        # Register todo tool
-        from open_agent.tools.todo import todo_handler
-        self.tool_registry.register(
-            name="todo",
-            handler=todo_handler,
-            schema=TODO_TOOL_SCHEMA,
-            description="Manage the current session's task plan.",
+        # Register all built-in tools via scan_builtin_tools
+        from open_agent.registry import scan_builtin_tools
+        self.tool_registry = ToolRegistry(
+            safety_manager=self.safety_manager,
+            max_tool_result_tokens=self.config.memory.max_tool_result_tokens,
+        )
+        scan_builtin_tools(self.tool_registry, self.config)
+
+        # Wire todo manager into the TodoTool instance
+        from open_agent.tools.todo import TodoTool
+        todo_tool = self.tool_registry.get("todo")
+        if isinstance(todo_tool, TodoTool):
+            todo_tool._todo_manager = self._todo_manager
+
+        # Re-create prompt builder with new registry
+        from open_agent.prompt.builder import PromptBuilder
+        self.prompt_builder = PromptBuilder(
+            tool_registry=self.tool_registry,
+            workspace=self.config.workspace,
         )
 
         # Wire memory + todo into ReActLoop
+        self.react_loop._registry = self.tool_registry
         self.react_loop._runtime_memory = self._runtime_memory
         self.react_loop._todo_manager = self._todo_manager
         self.react_loop._staleness_rounds = self.config.memory.todo_staleness_rounds
+        self.react_loop._prompt_builder = self.prompt_builder
 
         # Skills
         scan_builtin_skills(self.skill_registry)

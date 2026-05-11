@@ -257,19 +257,23 @@ class TestToolIntegration:
     """Test tool execution within the ReAct loop."""
 
     def test_tool_call_via_registry(self):
+        from open_agent.tools.base import FunctionTool
         registry = ToolRegistry()
 
         def echo(text: str) -> str:
             """Echo back the input."""
             return text
 
-        registry.register("echo", echo, description="Echo tool")
+        registry.register(FunctionTool(
+            name="echo",
+            description="Echo tool",
+            parameters={"type": "object", "properties": {"text": {"type": "string"}}},
+            handler=echo,
+        ))
 
         loop = ReActLoop(tool_registry=registry, max_iterations=3)
         decision = _simple_routing_decision()
 
-        # The rule-based mode uses direct_answer, but we verify the registry
-        # is functional and tools can be looked up.
         assert registry.has("echo")
-        entry = registry.get("echo")
-        assert entry.handler("hello") == "hello"
+        tool = registry.get("echo")
+        assert tool.name == "echo"

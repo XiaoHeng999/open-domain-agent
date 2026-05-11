@@ -39,12 +39,11 @@ class MemoryManager(BaseComponent, ABC):
 
 
 class ToolExecutor(BaseComponent, ABC):
-    """Abstract interface for tool execution."""
+    """Abstract interface for tool execution — deprecated, use ToolRegistry.execute()."""
 
     @abstractmethod
     async def execute(self, tool_name: str, args: dict[str, Any]) -> Any:
         ...
-
 
 class IntentRecognizer(BaseComponent, ABC):
     """Abstract interface for intent recognition."""
@@ -74,6 +73,17 @@ class ModelProvider(BaseComponent, ABC):
         self, messages: list[dict[str, Any]], schema: dict[str, Any], **kwargs: Any
     ) -> dict[str, Any]:
         ...
+
+    async def complete_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        tool_definitions: list[dict[str, Any]],
+        **kwargs: Any,
+    ) -> Any:
+        """Complete with native tool_use support. Returns ToolCallResponse."""
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not support tool_use"
+        )
 
 
 @dataclass

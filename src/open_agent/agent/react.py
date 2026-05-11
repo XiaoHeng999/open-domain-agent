@@ -3,13 +3,12 @@
 Implements the industry-standard agentic loop pattern used by Claude Code
 and OpenAI Codex:
 
-- Tool schemas are passed to the LLM so it knows exactly what tools exist.
-- The loop continues when the LLM calls a tool, stops when it gives a
-  direct text answer (no tool call).
-- Deterministic stop conditions: direct_answer, repeated actions, max steps.
+- Tool definitions passed via native tool_use API (Anthropic/OpenAI format).
+- Loop continues when LLM calls a tool (stop_reason="tool_use").
+- Loop stops when LLM gives text answer (stop_reason="end_turn").
+- Deterministic stop conditions: repeated actions, max steps.
 - No separate "reflection" LLM call — stopping is structural, not probabilistic.
 """
-
 from __future__ import annotations
 
 import json
@@ -51,6 +50,7 @@ class Action:
 
     tool_name: str
     args: dict[str, Any] = field(default_factory=dict)
+    tool_use_id: str = ""
     step_index: int = 0
 
 
@@ -60,6 +60,7 @@ class Observation:
 
     content: str
     tool_name: str = ""
+    tool_use_id: str = ""
     success: bool = True
     step_index: int = 0
 
@@ -116,28 +117,13 @@ class AgentResponse:
 # ReAct Loop
 # ---------------------------------------------------------------------------
 
-# Sentinel: the LLM returns this tool_name when it wants to give a final
-# answer without calling any real tool.
-_DIRECT_ANSWER_TOOL = "direct_answer"
-
 
 class ReActLoop:
     """Execute the Thought → Action → Observation cycle.
 
-    Parameters
-    ----------
-    tool_registry : ToolRegistry
-        Registry used to look up and invoke tools.
-    max_iterations : int
-        Hard cap on ReAct iterations (default 10).
-    provider : Any
-        Optional LLM provider for generating thoughts and actions.
-    runtime_memory : Any
-        Optional RuntimeMemory for managing context window.
-    todo_manager : Any
-        Optional TodoManager for session task plans.
-    staleness_rounds : int
-        Rounds before todo staleness reminder.
+    Uses native tool_use API instead of structured JSON simulation.
+    The LLM calls tools via the API's tool_use mechanism, and results
+    are returned via tool_result content blocks.
     """
 
     def __init__(
@@ -161,6 +147,8 @@ class ReActLoop:
         self._conversation_history: list[dict[str, str]] = []
         # Injected externally by AgentRuntime
         self._matched_skills: list[dict[str, Any]] = []
+        # tool_use/tool_result message history (accumulated during loop)
+        self._tool_messages: list[dict[str, Any]] = []
 
     # -- public API ----------------------------------------------------------
 
@@ -172,6 +160,7 @@ class ReActLoop:
     ) -> AgentResponse:
         """Run the full ReAct loop for *user_input*."""
         state = AgentState()
+        self._tool_messages = []
 
         root_span: Span | None = None
         if trace:
@@ -199,7 +188,7 @@ class ReActLoop:
                 if self._runtime_memory is not None:
                     self._runtime_memory.task_state.increment_step()
 
-                # 1. Thought + Action (single LLM call — decides tool & args)
+                # 1. Thought + Action (single LLM call via native tool_use)
                 thought_content, action = await self._think_and_act(
                     user_input, state, iteration, trace,
                 )
@@ -208,11 +197,11 @@ class ReActLoop:
 
                 # -- Deterministic stop conditions ------------------------
 
-                # (a) direct_answer → LLM chose not to call any tool → stop
-                if action.tool_name == _DIRECT_ANSWER_TOOL:
+                # (a) end_turn → LLM gave text answer, no tool call → stop
+                if not action.tool_name:
                     step.observation = Observation(
-                        content=action.args.get("answer", ""),
-                        tool_name=_DIRECT_ANSWER_TOOL,
+                        content=action.args.get("answer", thought_content),
+                        tool_name="",
                         success=True,
                         step_index=iteration,
                     )
@@ -244,7 +233,7 @@ class ReActLoop:
                     repeat_count = 0
                 last_action_key = action_key
 
-                # 2. Execute the tool
+                # 2. Execute the tool via registry
                 step.observation = await self._execute_action(
                     step.action, iteration, trace,
                 )
@@ -286,32 +275,61 @@ class ReActLoop:
         iteration: int,
         trace: Trace | None,
     ) -> tuple[str, Action]:
-        """Single LLM call: generate thought and decide action.
-
-        Returns (thought_content, Action).
-        """
+        """Single LLM call via native tool_use: returns (thought, Action)."""
         span = self._begin_step_span(trace, "think_and_act", iteration)
 
         if self._provider:
             messages = await self._build_messages(user_input, state)
-            raw = await self._provider.complete_structured(
-                messages,
-                schema=self._tool_schema(),
-            )
-            thought_content = raw.get("thought", "")
-            tool_name = raw.get("tool_name", _DIRECT_ANSWER_TOOL)
-            args = raw.get("args", {})
+            tool_definitions = self._registry.get_definitions()
+
+            # Use complete_with_tools if available
+            if hasattr(self._provider, "complete_with_tools"):
+                from open_agent.types import ToolCallResponse
+                response: ToolCallResponse = await self._provider.complete_with_tools(
+                    messages, tool_definitions,
+                )
+                thought_content = response.text
+
+                if response.tool_calls:
+                    tc = response.tool_calls[0]
+                    action = Action(
+                        tool_name=tc.name,
+                        args=tc.input,
+                        tool_use_id=tc.id,
+                        step_index=iteration,
+                    )
+                else:
+                    # No tool call — LLM gave direct answer
+                    action = Action(
+                        tool_name="",
+                        args={"answer": response.text},
+                        step_index=iteration,
+                    )
+            else:
+                # Fallback to complete_structured for providers without tool_use
+                raw = await self._provider.complete_structured(
+                    messages,
+                    schema=self._legacy_tool_schema(),
+                )
+                thought_content = raw.get("thought", "")
+                tool_name = raw.get("tool_name", "")
+                args = raw.get("args", {})
+                if tool_name == "direct_answer":
+                    tool_name = ""
+                    args = {"answer": args.get("answer", "")}
+                action = Action(tool_name=tool_name, args=args, step_index=iteration)
         else:
             thought_content, tool_name, args = self._rule_based_think_and_act(
                 user_input, state, iteration,
             )
-
-        action = Action(tool_name=tool_name, args=args, step_index=iteration)
+            if tool_name == "direct_answer":
+                tool_name = ""
+            action = Action(tool_name=tool_name, args=args, step_index=iteration)
 
         if span:
             span.set_attribute("thought", thought_content)
-            span.set_attribute("tool_name", tool_name)
-            span.set_attribute("args", str(args))
+            span.set_attribute("tool_name", action.tool_name)
+            span.set_attribute("args", str(action.args))
             span.finish()
 
         return thought_content, action
@@ -329,18 +347,20 @@ class ReActLoop:
 
         try:
             if self._registry.has(action.tool_name):
-                entry = self._registry.get(action.tool_name)
-
-                # Handle todo tool specially — inject TodoManager
-                if action.tool_name == "todo" and self._todo_manager is not None:
-                    result = entry.handler(**action.args, _todo_manager=self._todo_manager)
-                    # Reset todo staleness counter
-                    if self._runtime_memory is not None:
-                        self._runtime_memory.task_state.reset_todo_counter()
-                else:
-                    result = entry.handler(**action.args)
+                result = await self._registry.execute(action.tool_name, action.args)
                 content = str(result)
-                success = True
+                success = not content.startswith("Error:")
+
+                # Build tool_result message for next LLM call
+                if action.tool_use_id:
+                    self._tool_messages.append({
+                        "role": "assistant",
+                        "content": [{"type": "tool_use", "id": action.tool_use_id, "name": action.tool_name, "input": action.args}],
+                    })
+                    self._tool_messages.append({
+                        "role": "user",
+                        "content": [{"type": "tool_result", "tool_use_id": action.tool_use_id, "content": content, "is_error": not success}],
+                    })
             else:
                 content = f"Tool not found: {action.tool_name}"
                 success = False
@@ -361,6 +381,7 @@ class ReActLoop:
         return Observation(
             content=content,
             tool_name=action.tool_name,
+            tool_use_id=action.tool_use_id,
             success=success,
             step_index=iteration,
         )
@@ -390,22 +411,21 @@ class ReActLoop:
         span.set_attribute("phase", phase)
         return span
 
-    def _tool_schema(self) -> dict[str, Any]:
-        """Build the JSON schema describing the expected LLM output."""
+    def _legacy_tool_schema(self) -> dict[str, Any]:
+        """Fallback schema for providers without complete_with_tools."""
         available = []
-        for entry in self._registry.list_tools():
-            desc = entry.description or entry.schema.get("description", "")
-            schema = entry.schema.get("inputSchema", entry.schema.get("parameters", {}))
+        for tool in self._registry.list_tools():
+            schema = tool.parameters
             available.append({
-                "name": entry.name,
-                "description": desc,
+                "name": tool.name,
+                "description": tool.description,
                 "parameters": schema.get("properties", {}),
             })
 
         return {
             "thought": "string — your reasoning about what to do next",
-            "tool_name": f"string — name of the tool to call. Use '{_DIRECT_ANSWER_TOOL}' if you can answer directly without any tool.",
-            "args": "object — arguments for the tool. For direct_answer, use {\"answer\": \"your response\"}.",
+            "tool_name": "string — name of the tool to call. Use 'direct_answer' if you can answer directly.",
+            "args": "object — arguments for the tool.",
             "_available_tools": available,
         }
 
@@ -431,36 +451,6 @@ class ReActLoop:
         else:
             system_content = "You are a helpful agent using the ReAct framework."
 
-        # Append tool definitions and JSON format instructions
-        tool_schema = self._tool_schema()
-        tools_desc = tool_schema["_available_tools"]
-
-        if tools_desc:
-            tools_text = "Available tools:\n"
-            for t in tools_desc:
-                params = t["parameters"]
-                params_str = ", ".join(
-                    f"{k}: {v}" for k, v in params.items()
-                ) if params else "(no parameters)"
-                tools_text += f"- {t['name']}: {t['description']} — params: {params_str}\n"
-            tools_text += (
-                f"\nIf you can answer the user's question directly without using any tool, "
-                f"set tool_name to \"{_DIRECT_ANSWER_TOOL}\" and args to {{\"answer\": \"your response\"}}."
-            )
-        else:
-            tools_text = (
-                f"No tools are available. Set tool_name to \"{_DIRECT_ANSWER_TOOL}\" "
-                f"and args to {{\"answer\": \"your response\"}}."
-            )
-
-        system_content += (
-            f"\n\n{tools_text}"
-            "\n\nYou MUST respond in valid JSON with exactly these fields:"
-            f"\n- \"thought\": your reasoning (string)"
-            f"\n- \"tool_name\": the tool to call, or \"{_DIRECT_ANSWER_TOOL}\" to answer directly (string)"
-            '\n- "args": the arguments object'
-        )
-
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_content},
         ]
@@ -477,17 +467,10 @@ class ReActLoop:
         # Current user input
         messages.append({"role": "user", "content": user_input})
 
-        # Conversation history: previous steps
-        for step in state.steps:
-            if step.thought:
-                messages.append({"role": "assistant", "content": f"Thought: {step.thought.content}"})
-            if step.action:
-                messages.append({
-                    "role": "assistant",
-                    "content": f"Action: {step.action.tool_name}({json.dumps(step.action.args)})",
-                })
-            if step.observation:
-                messages.append({"role": "user", "content": f"Observation: {step.observation.content}"})
+        # Append tool_use/tool_result messages from this loop run
+        for msg in self._tool_messages:
+            messages.append(msg)
+
         return messages
 
     @staticmethod
@@ -498,12 +481,12 @@ class ReActLoop:
     ) -> tuple[str, str, dict[str, Any]]:
         """Fallback for when no LLM provider is configured."""
         if state.steps:
-            return "Task already addressed.", _DIRECT_ANSWER_TOOL, {"answer": ""}
+            return "Task already addressed.", "direct_answer", {"answer": ""}
         if iteration == 0:
             thought = f"I need to address the user's request: {user_input}"
         else:
             thought = f"Continuing to work on the request (step {iteration + 1})"
-        return thought, _DIRECT_ANSWER_TOOL, {"answer": user_input}
+        return thought, "direct_answer", {"answer": user_input}
 
     @staticmethod
     def _compose_final_answer(user_input: str, state: AgentState) -> str:
@@ -512,7 +495,7 @@ class ReActLoop:
                 step.observation
                 and step.observation.success
                 and step.action
-                and step.action.tool_name == _DIRECT_ANSWER_TOOL
+                and not step.action.tool_name
             ):
                 return step.observation.content or step.action.args.get("answer", "")
         for step in reversed(state.steps):

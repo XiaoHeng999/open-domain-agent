@@ -97,6 +97,14 @@ class TraceConfig(BaseModel):
     trace_dir: str = ".open_agent/traces"
 
 
+class ToolsConfig(BaseModel):
+    """Tool system configuration."""
+
+    exec_enabled: bool = True
+    brave_search_api_key: Optional[str] = Field(default=None, repr=False)
+    max_tool_result_tokens: int = Field(default=2000, ge=100)
+
+
 class AgentConfig(BaseModel):
     """Top-level agent configuration."""
 
@@ -107,6 +115,7 @@ class AgentConfig(BaseModel):
     routing: RoutingConfig = Field(default_factory=RoutingConfig)
     checkpoint: CheckpointConfig = Field(default_factory=CheckpointConfig)
     trace: TraceConfig = Field(default_factory=TraceConfig)
+    tools: ToolsConfig = Field(default_factory=ToolsConfig)
 
     workspace: str = "."
 

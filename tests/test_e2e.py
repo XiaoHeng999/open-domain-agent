@@ -7,6 +7,7 @@ import pytest
 
 from open_agent.config import AgentConfig, CheckpointConfig
 from open_agent.registry import ToolRegistry
+from open_agent.tools.base import FunctionTool
 from open_agent.trace import SpanKind, TraceManager
 from open_agent.routing.router import RoutingPipeline
 from open_agent.agent.react import ReActLoop
@@ -57,7 +58,12 @@ class TestMinimalRun:
             """
             return f"Hello, {name}!"
 
-        registry.register("greet", handler=greet)
+        registry.register(FunctionTool(
+            name="greet",
+            description="Greet someone.",
+            parameters={"type": "object", "properties": {"name": {"type": "string"}}},
+            handler=greet,
+        ))
 
         pipeline = RoutingPipeline()
         decision = await pipeline.route("greet John")
@@ -235,7 +241,12 @@ class TestSmokeTest:
             """
             return text
 
-        registry.register("echo", handler=echo)
+        registry.register(FunctionTool(
+            name="echo",
+            description="Echo text back.",
+            parameters={"type": "object", "properties": {"text": {"type": "string"}}},
+            handler=echo,
+        ))
 
         # Execute
         trace = trace_mgr.create_trace(metadata={"user_input": "test pipeline"})

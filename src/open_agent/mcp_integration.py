@@ -227,18 +227,32 @@ def register_tool_with_schema(
     server_id: str | None = None,
     tags: list[str] | None = None,
 ) -> None:
-    """Register a tool with its @tool_schema, enforcing schema requirement."""
-    if not hasattr(handler, "_tool_schema"):
+    """Register a tool using FunctionTool adapter.
+
+    Accepts handlers decorated with @tool_schema (legacy) or raw handlers
+    with explicit schema. Wraps in FunctionTool for Tool ABC compatibility.
+    """
+    from open_agent.tools.base import FunctionTool
+
+    if hasattr(handler, "_tool_schema"):
+        schema = handler._tool_schema
+        name = schema["name"]
+        description = schema.get("description", "")
+        # Convert MCP inputSchema format to Anthropic input_schema format
+        parameters = schema.get("inputSchema", schema.get("input_schema", {
+            "type": "object", "properties": {},
+        }))
+    else:
         raise ValueError(
-            f"Tool handler must be decorated with @tool_schema. "
+            f"Tool handler must be decorated with @tool_schema or provide a schema. "
             f"Handler: {handler.__name__}"
         )
-    schema = handler._tool_schema
-    registry.register(
-        name=schema["name"],
+
+    tool = FunctionTool(
+        name=name,
+        description=description,
+        parameters=parameters,
         handler=handler,
-        schema=schema,
-        tags=tags,
-        server_id=server_id,
-        description=schema.get("description", ""),
     )
+    tool._server_id = server_id
+    registry.register(tool, tags=tags)

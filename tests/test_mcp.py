@@ -79,8 +79,8 @@ class TestToolSchemaRegistration:
         register_tool_with_schema(registry, my_tool, server_id="s1")
         assert registry.has("test_tool")
         entry = registry.get("test_tool")
-        assert entry.server_id == "s1"
-        assert "query" in entry.schema["inputSchema"]["properties"]
+        assert getattr(entry, "_server_id", None) == "s1"
+        assert "query" in entry.parameters["properties"]
 
     def test_register_with_tags(self):
         registry = ToolRegistry()
