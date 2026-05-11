@@ -8,17 +8,19 @@ from open_agent.tools.base import Tool
 
 
 class ExecTool(Tool):
-    """Execute shell commands via async subprocess."""
+    """Execute shell commands via async subprocess or sandbox."""
 
     def __init__(
         self,
         workspace: str = ".",
         timeout: int = 30,
         max_output_chars: int = 10000,
+        sandbox: Any = None,
     ) -> None:
         self._workspace = workspace
         self._timeout = timeout
         self._max_output_chars = max_output_chars
+        self._sandbox = sandbox
 
     @property
     def name(self) -> str:
@@ -47,6 +49,34 @@ class ExecTool(Tool):
         command = kwargs.get("command", "")
         timeout = kwargs.get("timeout", self._timeout)
 
+        if self._sandbox is not None:
+            return await self._exec_via_sandbox(command, timeout)
+        return await self._exec_via_subprocess(command, timeout)
+
+    async def _exec_via_sandbox(self, command: str, timeout: int) -> str:
+        """Execute via sandbox instance."""
+        try:
+            result = await self._sandbox.exec(command, timeout=timeout)
+        except Exception as exc:
+            return f"Error: Sandbox execution failed: {exc}"
+
+        if not result.get("success", False):
+            error = result.get("error", "unknown error")
+            exit_code = result.get("exit_code")
+            if exit_code is not None:
+                output = result.get("output", "")
+                return f"Error (exit code {exit_code}): {output or error}"
+            return f"Error: {error}"
+
+        output = result.get("output", "")
+        stderr = result.get("error", "")
+        if stderr:
+            output += f"\n[stderr]: {stderr}"
+
+        return self._truncate(output)
+
+    async def _exec_via_subprocess(self, command: str, timeout: int) -> str:
+        """Execute via asyncio subprocess on host."""
         try:
             proc = await asyncio.create_subprocess_shell(
                 command,
@@ -71,8 +101,9 @@ class ExecTool(Tool):
             if stderr_str:
                 output += f"\n[stderr]: {stderr_str}"
 
-        # Truncate output
-        if len(output) > self._max_output_chars:
-            output = output[:self._max_output_chars] + f"\n...[truncated, {len(output)} chars total]"
+        return self._truncate(output)
 
+    def _truncate(self, output: str) -> str:
+        if len(output) > self._max_output_chars:
+            return output[:self._max_output_chars] + f"\n...[truncated, {len(output)} chars total]"
         return output

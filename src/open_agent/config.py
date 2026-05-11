@@ -3,11 +3,38 @@
 from __future__ import annotations
 
 import os
+from enum import Enum
 from pathlib import Path
 from typing import Any, Literal, Optional
 
 import yaml
 from pydantic import BaseModel, Field, model_validator
+
+
+class PermissionMode(str, Enum):
+    """Permission decision modes."""
+
+    CAUTIOUS = "cautious"
+    CONSERVATIVE = "conservative"
+    FLUENT = "fluent"
+    UNRESTRICTED = "unrestricted"
+
+
+class PermissionRule(BaseModel):
+    """A single deny/allow rule matching tool calls."""
+
+    tool: str
+    pattern: Optional[str] = None
+    path: Optional[str] = None
+    domain: Optional[str] = None
+
+
+class PermissionConfig(BaseModel):
+    """Permission system configuration — deny/mode/allow pipeline."""
+
+    mode: PermissionMode = PermissionMode.FLUENT
+    deny: list[PermissionRule] = Field(default_factory=list)
+    allow: list[PermissionRule] = Field(default_factory=list)
 
 
 class ModelConfig(BaseModel):
@@ -130,6 +157,7 @@ class AgentConfig(BaseModel):
     trace: TraceConfig = Field(default_factory=TraceConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     hooks: HooksConfig = Field(default_factory=HooksConfig)
+    permissions: PermissionConfig = Field(default_factory=PermissionConfig)
 
     workspace: str = "."
 
@@ -166,6 +194,7 @@ def _apply_env_overrides(data: dict[str, Any]) -> None:
         "OPEN_AGENT_SAFETY_LEVEL": ("safety", "safety_level"),
         "OPEN_AGENT_WORKSPACE": ("workspace",),
         "OPEN_AGENT_SANDBOX_BACKEND": ("sandbox", "backend"),
+        "OPEN_AGENT_PERMISSION_MODE": ("permissions", "mode"),
     }
     for env_key, path_parts in env_map.items():
         val = os.environ.get(env_key)

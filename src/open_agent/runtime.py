@@ -24,6 +24,7 @@ from open_agent.tools.todo import TodoManager, TODO_TOOL_SCHEMA
 from open_agent.skills.registry import SkillRegistry, scan_builtin_skills, scan_workspace_skills
 from open_agent.skills.matcher import SkillMatcher
 from open_agent.safety import SafetyManager
+from open_agent.safety.permission import PermissionGuard
 from open_agent.sandbox.factory import SandboxFactory
 from open_agent.monitoring.collector import AnomalyDetector, QualityScorer, FeedbackLoop, TraceCollector
 from open_agent.checkpoint.manager import CheckpointManager
@@ -109,6 +110,12 @@ class AgentRuntime(BaseComponent):
         # Safety
         self.safety_manager = SafetyManager(self.config.safety, self.config.workspace)
 
+        # Permission guard
+        self.permission_guard = PermissionGuard(
+            config=self.config.permissions,
+            hitl=self.safety_manager.hitl,
+        )
+
         # Sandbox
         self.sandbox = SandboxFactory.create(self.config.sandbox)
 
@@ -143,8 +150,12 @@ class AgentRuntime(BaseComponent):
         self.tool_registry = ToolRegistry(
             safety_manager=self.safety_manager,
             max_tool_result_tokens=self.config.memory.max_tool_result_tokens,
+            permission_guard=self.permission_guard,
         )
         scan_builtin_tools(self.tool_registry, self.config)
+
+        # Replace ExecTool with sandbox-injected version
+        self._inject_sandbox_to_exec_tool()
 
         # Wire todo manager into the TodoTool instance
         from open_agent.tools.todo import TodoTool
@@ -211,6 +222,41 @@ class AgentRuntime(BaseComponent):
                 storage=storage,
             )
             self.react_loop._checkpoint_manager = self.checkpoint_manager
+
+    def _inject_sandbox_to_exec_tool(self) -> None:
+        """Replace ExecTool with a sandbox-injected version, with fallback."""
+        import logging
+        from open_agent.tools.shell import ExecTool
+        from open_agent.sandbox.factory import SubprocessSandbox
+
+        sandbox = self.sandbox
+        if sandbox is not None:
+            try:
+                if hasattr(sandbox, "on_start"):
+                    import asyncio
+                    try:
+                        loop = asyncio.get_running_loop()
+                        loop.create_task(sandbox.on_start())
+                    except RuntimeError:
+                        asyncio.get_event_loop().run_until_complete(sandbox.on_start())
+            except Exception as exc:
+                logger = logging.getLogger("open_agent")
+                logger.warning(
+                    "Sandbox startup failed (%s), falling back to subprocess: %s",
+                    type(sandbox).__name__, exc,
+                )
+                sandbox = SubprocessSandbox()
+
+        if self.tool_registry.has("exec"):
+            workspace = self.config.workspace
+            old_tool = self.tool_registry.get("exec")
+            self.tool_registry.unregister("exec")
+            self.tool_registry.register(ExecTool(
+                workspace=workspace,
+                timeout=old_tool._timeout if hasattr(old_tool, "_timeout") else 30,
+                max_output_chars=old_tool._max_output_chars if hasattr(old_tool, "_max_output_chars") else 10000,
+                sandbox=sandbox,
+            ))
 
     async def on_stop(self) -> None:
         """Clean up all subsystems."""

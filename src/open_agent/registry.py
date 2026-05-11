@@ -25,11 +25,13 @@ class ToolRegistry:
         self,
         safety_manager: Any = None,
         max_tool_result_tokens: int = 2000,
+        permission_guard: Any = None,
     ) -> None:
         self._tools: dict[str, Tool] = {}
         self._tags: dict[str, list[str]] = {}
         self._safety_manager = safety_manager
         self._max_tool_result_tokens = max_tool_result_tokens
+        self._permission_guard = permission_guard
 
     def register(self, tool: Tool, tags: list[str] | None = None) -> None:
         """Register a Tool ABC instance."""
@@ -124,6 +126,14 @@ class ToolRegistry:
             safety_error = self._run_safety_checks(tool, params)
             if safety_error:
                 return safety_error
+
+        # Stage 3.5: permission guard
+        if self._permission_guard is not None:
+            from open_agent.safety.permission import PermissionDecision
+            tool_meta = {"read_only": tool.read_only}
+            perm_result = self._permission_guard.check(name, params, tool_meta)
+            if perm_result.decision == PermissionDecision.DENY:
+                return f"Error: Permission denied: {perm_result.reason}"
 
         # Stage 4: execute
         try:

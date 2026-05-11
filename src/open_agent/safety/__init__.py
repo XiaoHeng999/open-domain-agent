@@ -7,6 +7,7 @@ from typing import Any
 from open_agent.config import SafetyConfig
 from open_agent.safety.command import CommandSafetyChecker, SafetyCheckResult
 from open_agent.safety.hitl import HITLApprovalManager, HITLLevel, HITLResult
+from open_agent.safety.permission import PermissionDecision, PermissionGuard, PermissionResult
 from open_agent.safety.ssrf import SSRFProtector
 from open_agent.safety.workspace import PathRestrictor
 

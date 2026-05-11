@@ -67,6 +67,28 @@ sandbox:
   backend: subprocess
   auto_timeout: 300
 
+permissions:
+  # cautious | conservative | fluent | unrestricted
+  # cautious: ask user for all non-read operations
+  # conservative: only read operations allowed
+  # fluent: safe ops auto-allowed, others ask user (default)
+  # unrestricted: only deny rules apply
+  mode: fluent
+
+  # Deny rules — always block matching operations
+  deny: []
+  # - tool: exec
+  #   pattern: "rm -rf *"
+  # - tool: read_file
+  #   path: "./secrets/**"
+
+  # Allow rules — auto-allow matching operations (bypasses ask-user)
+  allow: []
+  # - tool: exec
+  #   pattern: "git status"
+  # - tool: exec
+  #   pattern: "pip install *"
+
 routing:
   # rule | llm
   complexity_method: rule
