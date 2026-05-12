@@ -117,7 +117,32 @@ class ParameterRecoveryStrategy(RecoveryStrategy):
             if prop_name not in args and "default" in prop_def:
                 args[prop_name] = prop_def["default"]
 
-        # Attempt retry -------------------------------------------------
+        # Attempt retry via tool_registry.execute() to ensure full pipeline,
+        # falling back to tool_handler for backward compatibility
+        tool_registry = context.get("tool_registry")
+        tool_name = context.get("tool_name", "")
+        if tool_registry is not None and tool_name:
+            try:
+                result = await tool_registry.execute(tool_name, args)
+                return RecoveryResult(
+                    status=RecoveryStatus.SUCCESS,
+                    error_type="parameter_error",
+                    strategy_name=self.name,
+                    message="Parameters corrected; retry succeeded.",
+                    data={"corrected_args": args, "result": result},
+                    duration_ms=(time.monotonic() - start) * 1000,
+                )
+            except Exception as retry_err:
+                return RecoveryResult(
+                    status=RecoveryStatus.FAILED,
+                    error_type="parameter_error",
+                    strategy_name=self.name,
+                    message=f"Retry with corrected params failed: {retry_err}",
+                    data={"corrected_args": args},
+                    duration_ms=(time.monotonic() - start) * 1000,
+                )
+
+        # Fallback: direct tool_handler call (legacy path)
         tool_handler: Callable[..., Any] | None = context.get("tool_handler")
         if tool_handler is not None:
             try:
@@ -146,7 +171,7 @@ class ParameterRecoveryStrategy(RecoveryStrategy):
             status=RecoveryStatus.FAILED,
             error_type="parameter_error",
             strategy_name=self.name,
-            message="No tool_handler in context; cannot retry.",
+            message="No tool_registry or tool_name in context; cannot retry.",
             data={"corrected_args": args},
             duration_ms=(time.monotonic() - start) * 1000,
         )
@@ -174,8 +199,23 @@ class RetrievalRecoveryStrategy(RecoveryStrategy):
         if query:
             expanded = self._expand_query(str(query))
             args["query"] = expanded
+            tool_registry = context.get("tool_registry")
+            tool_name = context.get("tool_name", "")
             tool_handler = context.get("tool_handler")
-            if tool_handler is not None:
+            if tool_registry is not None and tool_name:
+                try:
+                    result = await tool_registry.execute(tool_name, args)
+                    return RecoveryResult(
+                        status=RecoveryStatus.SUCCESS,
+                        error_type="retrieval_error",
+                        strategy_name=self.name,
+                        message="Query expanded; retry succeeded.",
+                        data={"expanded_query": expanded, "result": result},
+                        duration_ms=(time.monotonic() - start) * 1000,
+                    )
+                except Exception:
+                    pass  # fall through to next step
+            elif tool_handler is not None:
                 try:
                     result = tool_handler(**args)
                     if asyncio.iscoroutine(result):
@@ -196,8 +236,23 @@ class RetrievalRecoveryStrategy(RecoveryStrategy):
         if isinstance(filters, dict) and filters:
             relaxed = self._relax_filters(filters)
             args["filters"] = relaxed
+            tool_registry = context.get("tool_registry")
+            tool_name = context.get("tool_name", "")
             tool_handler = context.get("tool_handler")
-            if tool_handler is not None:
+            if tool_registry is not None and tool_name:
+                try:
+                    result = await tool_registry.execute(tool_name, args)
+                    return RecoveryResult(
+                        status=RecoveryStatus.SUCCESS,
+                        error_type="retrieval_error",
+                        strategy_name=self.name,
+                        message="Filters relaxed; retry succeeded.",
+                        data={"relaxed_filters": relaxed, "result": result},
+                        duration_ms=(time.monotonic() - start) * 1000,
+                    )
+                except Exception:
+                    pass  # fall through
+            elif tool_handler is not None:
                 try:
                     result = tool_handler(**args)
                     if asyncio.iscoroutine(result):
@@ -268,15 +323,31 @@ class ServiceRecoveryStrategy(RecoveryStrategy):
         context: dict[str, Any],
     ) -> RecoveryResult:
         start = time.monotonic()
+        tool_registry = context.get("tool_registry")
+        tool_name = context.get("tool_name", "")
         tool_handler = context.get("tool_handler")
         args: dict[str, Any] = dict(context.get("args", {}))
 
-        # Phase 1 — exponential backoff retries -------------------------
+        # Phase 1 — exponential backoff retries via full pipeline --------
         last_exc: Exception | None = None
         for attempt in range(1, self.MAX_RETRIES + 1):
             delay = self.BASE_DELAY * (2 ** (attempt - 1))
             await asyncio.sleep(delay)
-            if tool_handler is not None:
+            if tool_registry is not None and tool_name:
+                try:
+                    result = await tool_registry.execute(tool_name, args)
+                    return RecoveryResult(
+                        status=RecoveryStatus.SUCCESS,
+                        error_type="service_error",
+                        strategy_name=self.name,
+                        attempt=attempt,
+                        message=f"Retry attempt {attempt} succeeded.",
+                        data={"result": result, "attempts": attempt},
+                        duration_ms=(time.monotonic() - start) * 1000,
+                    )
+                except Exception as exc:
+                    last_exc = exc
+            elif tool_handler is not None:
                 try:
                     result = tool_handler(**args)
                     if asyncio.iscoroutine(result):
@@ -293,13 +364,12 @@ class ServiceRecoveryStrategy(RecoveryStrategy):
                 except Exception as exc:
                     last_exc = exc
 
-        # Phase 2 — fallback tool lookup --------------------------------
-        registry = context.get("tool_registry")
-        if registry is not None:
-            fallback_tools = registry.list_by_tag("fallback")
+        # Phase 2 — fallback tool lookup via registry.execute() ----------
+        if tool_registry is not None:
+            fallback_tools = tool_registry.list_by_tag("fallback")
             for entry in fallback_tools:
                 try:
-                    result = await entry.execute(**args)
+                    result = await tool_registry.execute(entry.name, args)
                     return RecoveryResult(
                         status=RecoveryStatus.SUCCESS,
                         error_type="service_error",

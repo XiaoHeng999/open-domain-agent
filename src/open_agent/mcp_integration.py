@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 import json
 import logging
+import shlex
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -67,16 +69,16 @@ class ServerHealth:
 class MCPTransport:
     """Abstraction over MCP transport — stdio/SSE/HTTP."""
 
-    _request_counter: int = 0
+    _request_counter = itertools.count()
 
     def __init__(self, config: ServerConfig) -> None:
         self.config = config
         self._session = None
+        self._http_client: httpx.AsyncClient | None = None
 
     def _next_id(self) -> str:
-        """Generate a unique request id (atomic increment)."""
-        MCPTransport._request_counter += 1
-        return str(MCPTransport._request_counter)
+        """Generate a unique request id (atomic via itertools.count)."""
+        return str(next(MCPTransport._request_counter))
 
     def _build_request(self, method: str, params: dict[str, Any] | None = None) -> tuple[str, str]:
         """Build a JSON-RPC 2.0 request. Returns (request_id, json_str)."""
@@ -104,10 +106,12 @@ class MCPTransport:
 
     async def connect(self) -> None:
         """Establish transport connection."""
+        import httpx
+        self._http_client = httpx.AsyncClient()
         if self.config.transport == TransportType.STDIO:
             if self.config.command:
                 self._process = await asyncio.create_subprocess_exec(
-                    *self.config.command.split(),
+                    *shlex.split(self.config.command),
                     stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
@@ -125,6 +129,9 @@ class MCPTransport:
         if hasattr(self, "_sse_client") and self._sse_client:
             await self._sse_client.aclose()
             self._sse_client = None
+        if self._http_client is not None:
+            await self._http_client.aclose()
+            self._http_client = None
 
     async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> Any:
         """Call a tool through the transport."""
@@ -171,30 +178,34 @@ class MCPTransport:
         request_id, payload = self._build_request(
             "tools/call", {"name": tool_name, "arguments": arguments}
         )
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                self.config.url,
-                content=payload,
-                headers={**self.config.headers, "Content-Type": "application/json"},
-                timeout=30,
-            )
-            raw = resp.json()
-            return self._parse_response(raw, request_id)
+        client = self._http_client
+        if client is None:
+            client = httpx.AsyncClient()
+        resp = await client.post(
+            self.config.url,
+            content=payload,
+            headers={**self.config.headers, "Content-Type": "application/json"},
+            timeout=30,
+        )
+        raw = resp.json()
+        return self._parse_response(raw, request_id)
 
     async def _tools_list_http(self) -> list[dict[str, Any]]:
         """HTTP transport: tools/list request."""
         import httpx
         request_id, payload = self._build_request("tools/list", {})
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                self.config.url,
-                content=payload,
-                headers={**self.config.headers, "Content-Type": "application/json"},
-                timeout=30,
-            )
-            raw = resp.json()
-            result = self._parse_response(raw, request_id)
-            return result.get("tools", []) if result else []
+        client = self._http_client
+        if client is None:
+            client = httpx.AsyncClient()
+        resp = await client.post(
+            self.config.url,
+            content=payload,
+            headers={**self.config.headers, "Content-Type": "application/json"},
+            timeout=30,
+        )
+        raw = resp.json()
+        result = self._parse_response(raw, request_id)
+        return result.get("tools", []) if result else []
 
     # ── SSE Transport ──
 
@@ -283,6 +294,7 @@ class MCPServerManager(BaseComponent):
     """Manage MCP server registration, lifecycle, and health."""
 
     def __init__(self, tool_registry: ToolRegistry) -> None:
+        super().__init__()
         self._tool_registry = tool_registry
         self._servers: dict[str, ServerConfig] = {}
         self._transports: dict[str, MCPTransport] = {}
@@ -404,7 +416,9 @@ class MCPServerManager(BaseComponent):
     ) -> dict[str, Any]:
         """Unified tool call — route to correct server."""
         entry = self._tool_registry.get(tool_name)
-        server_id = entry.server_id
+        server_id = getattr(entry, "_server_id", None)
+        if server_id is None:
+            return {"success": False, "error": f"Tool {tool_name} has no associated MCP server"}
 
         span = None
         if trace:

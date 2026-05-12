@@ -13,6 +13,7 @@ class DockerSandbox(BaseComponent):
     """Docker-based sandbox for isolated command execution."""
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
+        super().__init__()
         self.config = config or {}
         self._client = None
         self._container = None

@@ -59,6 +59,7 @@ class RoutingPipeline(BaseComponent):
         domains: list[str] | None = None,
         routing_provider: Any = None,
     ) -> None:
+        super().__init__()
         if complexity_method == "llm" and provider:
             self._complexity_judge = LLMComplexityJudge(provider)
         else:

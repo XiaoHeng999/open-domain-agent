@@ -12,6 +12,7 @@ class SubprocessSandbox(BaseComponent):
     """Minimal sandbox using subprocess — no isolation, for development only."""
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
+        super().__init__()
         self.config = config or {}
 
     async def exec(self, command: str, timeout: int = 30) -> dict[str, Any]:

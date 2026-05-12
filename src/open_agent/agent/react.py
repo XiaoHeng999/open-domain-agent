@@ -200,11 +200,10 @@ class ReActLoop:
 
         # Initialize task state if using RuntimeMemory
         if self._runtime_memory is not None:
-            from open_agent.memory.models import TaskState
-            self._runtime_memory._task_state = TaskState()
+            self._runtime_memory.reset_task_state()
 
         # Track last action for repeat detection
-        last_action_key: tuple[str, str] | None = None
+        last_action_keys: list[tuple[str, str]] = []
         repeat_count = 0
 
         try:
@@ -215,19 +214,23 @@ class ReActLoop:
                 if self._runtime_memory is not None:
                     self._runtime_memory.task_state.increment_step()
 
-                # 1. Thought + Action (single LLM call via native tool_use)
-                thought_content, action = await self._think_and_act(
+                # 1. Thought + Actions (single LLM call via native tool_use)
+                thought_content, actions = await self._think_and_act(
                     user_input, state, iteration, trace,
                 )
                 step.thought = Thought(content=thought_content, step_index=iteration)
-                step.action = action
 
                 # -- Deterministic stop conditions ------------------------
 
-                # (a) end_turn → LLM gave text answer, no tool call → stop
-                if not action.tool_name:
+                # (a) end_turn → LLM gave text answer, no tool calls → stop
+                if not actions:
+                    step.action = Action(
+                        tool_name="",
+                        args={"answer": thought_content},
+                        step_index=iteration,
+                    )
                     step.observation = Observation(
-                        content=action.args.get("answer", thought_content),
+                        content=thought_content,
                         tool_name="",
                         success=True,
                         step_index=iteration,
@@ -237,18 +240,24 @@ class ReActLoop:
                         self._runtime_memory.task_state.mark_finished("direct_answer")
                     break
 
-                # (b) Repeated action detection (same tool + same args)
-                action_key = (action.tool_name, json.dumps(action.args, sort_keys=True))
-                if action_key == last_action_key:
+                # Store first action in step for backward compat
+                step.action = actions[0]
+
+                # (b) Repeated action batch detection
+                current_keys = sorted(
+                    (a.tool_name, json.dumps(a.args, sort_keys=True))
+                    for a in actions
+                )
+                if current_keys == last_action_keys:
                     repeat_count += 1
                     if repeat_count >= 3:
                         logger.warning(
-                            "Stopping: action %s repeated %d times",
-                            action.tool_name, repeat_count + 1,
+                            "Stopping: action batch repeated %d times",
+                            repeat_count + 1,
                         )
                         step.observation = Observation(
-                            content=f"Action {action.tool_name} repeated with identical arguments. Stopping to prevent loop.",
-                            tool_name=action.tool_name,
+                            content=f"Action batch repeated with identical arguments. Stopping to prevent loop.",
+                            tool_name=actions[0].tool_name,
                             success=False,
                             step_index=iteration,
                         )
@@ -258,13 +267,17 @@ class ReActLoop:
                         break
                 else:
                     repeat_count = 0
-                last_action_key = action_key
+                last_action_keys = current_keys
 
-                # 2. Execute the tool via registry
-                step.observation = await self._execute_action(
-                    step.action, iteration, trace,
-                )
-                state.add_step(step)
+                # 2. Execute each tool action
+                for act in actions:
+                    obs = await self._execute_action(act, iteration, trace)
+                    state.add_step(ReActStep(
+                        index=iteration,
+                        thought=Thought(content=thought_content, step_index=iteration) if act == actions[0] else None,
+                        action=act,
+                        observation=obs,
+                    ))
 
                 # 3. Checkpoint after each completed step
                 if self._checkpoint_manager is not None:
@@ -338,8 +351,8 @@ class ReActLoop:
         state: AgentState,
         iteration: int,
         trace: Trace | None,
-    ) -> tuple[str, Action]:
-        """Single LLM call via native tool_use: returns (thought, Action)."""
+    ) -> tuple[str, list[Action]]:
+        """Single LLM call via native tool_use: returns (thought, list[Action])."""
         span = self._begin_step_span(trace, "think_and_act", iteration)
 
         if self._provider:
@@ -355,20 +368,18 @@ class ReActLoop:
                 thought_content = response.text
 
                 if response.tool_calls:
-                    tc = response.tool_calls[0]
-                    action = Action(
-                        tool_name=tc.name,
-                        args=tc.input,
-                        tool_use_id=tc.id,
-                        step_index=iteration,
-                    )
+                    actions = [
+                        Action(
+                            tool_name=tc.name,
+                            args=tc.input,
+                            tool_use_id=tc.id,
+                            step_index=iteration,
+                        )
+                        for tc in response.tool_calls
+                    ]
                 else:
                     # No tool call — LLM gave direct answer
-                    action = Action(
-                        tool_name="",
-                        args={"answer": response.text},
-                        step_index=iteration,
-                    )
+                    actions = []
             else:
                 # Fallback to complete_structured for providers without tool_use
                 raw = await self._provider.complete_structured(
@@ -381,22 +392,24 @@ class ReActLoop:
                 if tool_name == "direct_answer":
                     tool_name = ""
                     args = {"answer": args.get("answer", "")}
-                action = Action(tool_name=tool_name, args=args, step_index=iteration)
+                actions = [Action(tool_name=tool_name, args=args, step_index=iteration)] if tool_name else []
         else:
             thought_content, tool_name, args = self._rule_based_think_and_act(
                 user_input, state, iteration,
             )
             if tool_name == "direct_answer":
-                tool_name = ""
-            action = Action(tool_name=tool_name, args=args, step_index=iteration)
+                actions = []
+            else:
+                actions = [Action(tool_name=tool_name, args=args, step_index=iteration)]
 
         if span:
             span.set_attribute("thought", thought_content)
-            span.set_attribute("tool_name", action.tool_name)
-            span.set_attribute("args", str(action.args))
+            span.set_attribute("tool_count", len(actions))
+            if actions:
+                span.set_attribute("tool_names", [a.tool_name for a in actions])
             span.finish()
 
-        return thought_content, action
+        return thought_content, actions
 
     async def _execute_action(
         self,
@@ -541,6 +554,7 @@ class ReActLoop:
 
         context: dict[str, Any] = {
             "tool_registry": self._registry,
+            "tool_name": action.tool_name,
             "args": action.args,
         }
         tool = self._registry.get(action.tool_name)
@@ -615,7 +629,6 @@ class ReActLoop:
             # Inject session welcome text from hooks
             if self._session_welcome:
                 system_content = system_content + "\n\n" + self._session_welcome
-                system_content = self._domain_system_prompt + "\n\n" + system_content
             # Inject resumed-from marker
             if self._resumed_from_step is not None:
                 system_content += f"\n\n<resumed_from_step={self._resumed_from_step}>"

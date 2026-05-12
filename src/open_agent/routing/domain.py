@@ -45,6 +45,7 @@ class DomainRouter(BaseComponent):
     """Route requests to domain agents based on keyword matching."""
 
     def __init__(self, domains: dict[str, dict[str, Any]] | None = None) -> None:
+        super().__init__()
         self._domains = domains or _DOMAINS
 
     def route(self, user_input: str) -> DomainRouteResult:

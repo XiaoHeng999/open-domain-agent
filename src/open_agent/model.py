@@ -65,7 +65,7 @@ class OpenAIProvider(ModelProvider):
             temperature=kwargs.get("temperature", self.config.temperature),
             max_tokens=kwargs.get("max_tokens", self.config.max_tokens),
         )
-        return response.choices[0].message.content
+        return response.choices[0].message.content or ""
 
     async def complete_structured(
         self, messages: list[dict[str, Any]], schema: dict[str, Any], **kwargs: Any
@@ -174,7 +174,7 @@ class AnthropicProvider(ModelProvider):
             system=system or "",
             messages=user_messages,
         )
-        return response.content[0].text
+        return response.content[0].text if response.content else ""
 
     async def complete_structured(
         self, messages: list[dict[str, Any]], schema: dict[str, Any], **kwargs: Any

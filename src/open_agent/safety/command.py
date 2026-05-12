@@ -6,6 +6,18 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+# Dangerous shell metacharacters that can bypass whitelist
+_DANGEROUS_METACHAR_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r";"),           # command separator
+    re.compile(r"\|"),          # pipe
+    re.compile(r"&&"),          # AND operator
+    re.compile(r"\|\|"),        # OR operator
+    re.compile(r"\$\("),        # command substitution
+    re.compile(r"`"),           # backtick substitution
+    re.compile(r">"),           # redirect
+    re.compile(r"<"),           # redirect input
+]
+
 # Dangerous command patterns
 _BLACKLIST_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"\brm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+)?/(\s|$)"),  # rm -rf /
@@ -59,6 +71,15 @@ class CommandSafetyChecker:
         """Check if a command is safe to execute."""
         if not command.strip():
             return SafetyCheckResult(safe=True)
+
+        # Check for dangerous shell metacharacters first (prevents whitelist bypass)
+        for pattern in _DANGEROUS_METACHAR_PATTERNS:
+            if pattern.search(command):
+                return SafetyCheckResult(
+                    safe=False,
+                    reason=f"Dangerous shell metacharacter detected",
+                    matched_pattern=pattern.pattern,
+                )
 
         # Whitelist mode: only allow known-safe commands
         if self._whitelist_mode:

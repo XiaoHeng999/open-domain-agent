@@ -77,6 +77,7 @@ class UnifiedLLMRouter(BaseComponent):
     """Single-LLM-call router replacing the three-stage keyword pipeline."""
 
     def __init__(self, provider: Any, domains: dict[str, dict[str, Any]] | None = None) -> None:
+        super().__init__()
         self._provider = provider
         self._domains = domains or {}
         self._system_prompt = self._build_system_prompt()

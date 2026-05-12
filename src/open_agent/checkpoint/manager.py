@@ -73,6 +73,7 @@ class CheckpointManager(BaseComponent):
         config: CheckpointConfig | None = None,
         storage: CheckpointStorage | None = None,
     ) -> None:
+        super().__init__()
         self.config = config or CheckpointConfig()
         self._storage = storage or self._build_storage(self.config)
         # Track idempotency keys we have already persisted in this session.

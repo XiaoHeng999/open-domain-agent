@@ -86,6 +86,10 @@ class RuntimeMemory(MemoryManager):
     def task_state(self) -> TaskState:
         return self._task_state
 
+    def reset_task_state(self) -> None:
+        """Reset task state for a new run."""
+        self._task_state = TaskState()
+
     @property
     def rolling_summary(self) -> str:
         return self._rolling_summary

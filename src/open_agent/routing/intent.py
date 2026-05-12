@@ -22,6 +22,7 @@ class IntentParser(BaseComponent):
     """Parse structured intent + slots from user input within a domain."""
 
     def __init__(self, provider: Any = None) -> None:
+        super().__init__()
         self._provider = provider
 
     async def parse(self, user_input: str, domain: str) -> IntentResult:

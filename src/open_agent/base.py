@@ -10,8 +10,9 @@ from typing import Any
 class BaseComponent(ABC):
     """Base for all core components with lifecycle hooks."""
 
-    _registered: bool = False
-    _started: bool = False
+    def __init__(self) -> None:
+        self._registered: bool = False
+        self._started: bool = False
 
     async def on_register(self) -> None:
         self._registered = True

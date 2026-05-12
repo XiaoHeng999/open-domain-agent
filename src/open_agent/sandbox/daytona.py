@@ -12,6 +12,7 @@ class DaytonaSandbox(BaseComponent):
     """Daytona sandbox — provides isolated execution environment."""
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
+        super().__init__()
         self.config = config or {}
         self._client = None
         self._workspace = None

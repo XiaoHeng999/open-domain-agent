@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time as _time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -105,7 +106,7 @@ class VectorStore:
         directory = Path(directory)
         npz_path = directory / "vectors.npz"
         if npz_path.exists():
-            data = np.load(npz_path, allow_pickle=True)
+            data = np.load(npz_path, allow_pickle=False)
             self._vectors = data["vectors"]
             self._ids = list(data["ids"])
             self._dim = self._vectors.shape[1] if self._vectors.size else self._dim
@@ -222,7 +223,7 @@ class RetrievalMemory(MemoryManager):
             "layer": "episodic",
             "task_type": task_type,
             "success": success,
-            "timestamp": __import__("time").strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "timestamp": _time.strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
         embedding = self._embedding.embed(text)
         record_id = uuid.uuid4().hex[:12]

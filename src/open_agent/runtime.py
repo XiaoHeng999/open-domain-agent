@@ -51,6 +51,7 @@ class AgentRuntime(BaseComponent):
     """End-to-end Agent Runtime — unified lifecycle for all modules."""
 
     def __init__(self, config: AgentConfig | None = None) -> None:
+        super().__init__()
         self.config = config or AgentConfig()
 
         # Core infrastructure
@@ -159,7 +160,7 @@ class AgentRuntime(BaseComponent):
         scan_builtin_tools(self.tool_registry, self.config)
 
         # Replace ExecTool with sandbox-injected version
-        self._inject_sandbox_to_exec_tool()
+        await self._inject_sandbox_to_exec_tool()
 
         # Wire todo manager into the TodoTool instance
         from open_agent.tools.todo import TodoTool
@@ -260,7 +261,7 @@ class AgentRuntime(BaseComponent):
                 return_exceptions=True,
             )
 
-    def _inject_sandbox_to_exec_tool(self) -> None:
+    async def _inject_sandbox_to_exec_tool(self) -> None:
         """Replace ExecTool with a sandbox-injected version, with fallback."""
         import logging
         from open_agent.tools.shell import ExecTool
@@ -270,12 +271,7 @@ class AgentRuntime(BaseComponent):
         if sandbox is not None:
             try:
                 if hasattr(sandbox, "on_start"):
-                    import asyncio
-                    try:
-                        loop = asyncio.get_running_loop()
-                        loop.create_task(sandbox.on_start())
-                    except RuntimeError:
-                        asyncio.get_event_loop().run_until_complete(sandbox.on_start())
+                    await sandbox.on_start()
             except Exception as exc:
                 logger = logging.getLogger("open_agent")
                 logger.warning(
@@ -395,7 +391,7 @@ class AgentRuntime(BaseComponent):
                 checkpoints = self.checkpoint_manager.list_checkpoints()
                 if checkpoints:
                     tools_used = list({
-                        s.action.tool_name
+                        block["name"]
                         for s in self.react_loop._tool_messages
                         if s.get("role") == "assistant"
                         for block in s.get("content", [])

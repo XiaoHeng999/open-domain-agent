@@ -73,6 +73,7 @@ class LLMComplexityJudge(BaseComponent):
     """LLM-based complexity judge — uses lightweight model for classification."""
 
     def __init__(self, provider: Any) -> None:
+        super().__init__()
         self._provider = provider
 
     async def judge(self, user_input: str) -> ComplexityResult:

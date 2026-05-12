@@ -2,7 +2,7 @@
 
 Supports:
 - register/unregister/get/has/snapshot/restore (preserved from v1)
-- execute(name, params): async 3-stage pipeline (cast → validate → safety → execute → truncate)
+- execute(name, params): async pipeline via middleware chain (cast → validate → safety → permission → execute → truncate)
 - get_definitions(): Anthropic tool_use format output for all registered tools
 - scan_builtin_tools(): auto-discover and register built-in tools
 """
@@ -13,6 +13,9 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from open_agent.middleware import (
+    MiddlewareContext, default_chain, build_middleware_chain,
+)
 from open_agent.tools.base import FunctionTool, Tool
 
 logger = logging.getLogger("open_agent")
@@ -32,6 +35,11 @@ class ToolRegistry:
         self._safety_manager = safety_manager
         self._max_tool_result_tokens = max_tool_result_tokens
         self._permission_guard = permission_guard
+        self._chain = default_chain(
+            safety_manager=safety_manager,
+            permission_guard=permission_guard,
+            max_tool_result_tokens=max_tool_result_tokens,
+        )
 
     def register(self, tool: Tool, tags: list[str] | None = None) -> None:
         """Register a Tool ABC instance."""
@@ -104,7 +112,7 @@ class ToolRegistry:
     # ── Execution pipeline ──
 
     async def execute(self, name: str, params: dict[str, Any]) -> str:
-        """Execute a tool through the full pipeline: cast → validate → safety → execute → truncate."""
+        """Execute a tool through the middleware chain: cast → validate → safety → permission → truncate → execute."""
         if name not in self._tools:
             return f"Error: Tool not found: {name}"
 
@@ -121,63 +129,16 @@ class ToolRegistry:
         if errors:
             return f"Error: Validation failed: {'; '.join(errors)}"
 
-        # Stage 3: safety checks
-        if self._safety_manager is not None:
-            safety_error = self._run_safety_checks(tool, params)
-            if safety_error:
-                return safety_error
-
-        # Stage 3.5: permission guard
-        if self._permission_guard is not None:
-            from open_agent.safety.permission import PermissionDecision
-            tool_meta = {"read_only": tool.read_only}
-            perm_result = self._permission_guard.check(name, params, tool_meta)
-            if perm_result.decision == PermissionDecision.DENY:
-                return f"Error: Permission denied: {perm_result.reason}"
-
-        # Stage 4: execute
-        try:
-            result = tool.execute(**params)
-            if hasattr(result, "__await__"):
-                result = await result
-            result = str(result)
-        except Exception as exc:
-            result = f"Error: {exc}"
-
-        # Stage 5: truncate
-        result = self._truncate_result(result)
-
-        return result
-
-    def _run_safety_checks(
-        self, tool: Tool, params: dict[str, Any],
-    ) -> str | None:
-        """Run safety checks for the tool. Returns error string or None."""
-        for check_type in tool.safety_checks:
-            if check_type == "command":
-                command = params.get("command", "")
-                result = self._safety_manager.check_command(command)
-                if not result.safe:
-                    return f"Error: Command blocked by safety policy: {result.reason}"
-            elif check_type == "url":
-                url = params.get("url", "")
-                result = self._safety_manager.check_url(url)
-                if not result.safe:
-                    return f"Error: URL blocked by safety policy: {result.reason}"
-            elif check_type == "path":
-                path = params.get("path", "")
-                allow_write = not tool.read_only
-                result = self._safety_manager.check_path(path, allow_write=allow_write)
-                if not result.safe:
-                    return f"Error: Path blocked by safety policy: {result.reason}"
-        return None
-
-    def _truncate_result(self, result: str) -> str:
-        """Truncate result based on max_tool_result_tokens config."""
-        max_chars = self._max_tool_result_tokens * 4
-        if len(result) > max_chars:
-            return result[:max_chars] + f"\n...[truncated, {len(result)} chars total]"
-        return result
+        # Stage 3+: middleware chain (safety → permission → truncate → execute)
+        ctx = MiddlewareContext(
+            tool=tool,
+            params=params,
+            tool_name=name,
+            safety_manager=self._safety_manager,
+            permission_guard=self._permission_guard,
+            max_tool_result_tokens=self._max_tool_result_tokens,
+        )
+        return await self._chain(ctx)
 
     # ── Schema export ──
 
