@@ -207,6 +207,10 @@ class ReActLoop:
         last_action_keys: list[tuple[str, str]] = []
         repeat_count = 0
 
+        # Tool health tracking
+        tool_failure_counts: dict[str, int] = {}
+        degraded_tools: set[str] = set()
+
         try:
             for iteration in range(start_iteration, self._max_iterations):
                 logger.info("react.iteration.start iter=%d/%d", iteration + 1, self._max_iterations)
@@ -273,7 +277,44 @@ class ReActLoop:
 
                 # 2. Execute each tool action
                 for act in actions:
+                    # Check if all tools are degraded — force terminate
+                    if degraded_tools and all(
+                        a.tool_name in degraded_tools for a in actions
+                    ):
+                        tool_failures = "; ".join(
+                            f"{name} (consecutive failures)" for name in sorted(degraded_tools)
+                        )
+                        obs = Observation(
+                            content=f"All available tools are degraded. {tool_failures}",
+                            tool_name=act.tool_name,
+                            success=False,
+                            step_index=iteration,
+                        )
+                        state.add_step(ReActStep(
+                            index=iteration,
+                            thought=Thought(content=thought_content, step_index=iteration) if act == actions[0] else None,
+                            action=act,
+                            observation=obs,
+                        ))
+                        if self._runtime_memory is not None:
+                            self._runtime_memory.task_state.mark_finished("all_tools_degraded")
+                        break
+
                     obs = await self._execute_action(act, iteration, trace)
+
+                    # Update tool health tracking
+                    if obs.success:
+                        tool_failure_counts[act.tool_name] = 0
+                        degraded_tools.discard(act.tool_name)
+                    else:
+                        tool_failure_counts[act.tool_name] = tool_failure_counts.get(act.tool_name, 0) + 1
+                        if tool_failure_counts[act.tool_name] >= 3:
+                            degraded_tools.add(act.tool_name)
+
+                    # Append degraded warning if tool is degraded
+                    if act.tool_name in degraded_tools:
+                        obs.content += f"\n[Warning: Tool '{act.tool_name}' has been failing repeatedly. Consider using an alternative approach.]"
+
                     state.add_step(ReActStep(
                         index=iteration,
                         thought=Thought(content=thought_content, step_index=iteration) if act == actions[0] else None,
@@ -706,6 +747,7 @@ class ReActLoop:
 
     @staticmethod
     def _compose_final_answer(user_input: str, state: AgentState) -> str:
+        # Check for direct answer (tool_name is empty)
         for step in reversed(state.steps):
             if (
                 step.observation
@@ -714,7 +756,37 @@ class ReActLoop:
                 and not step.action.tool_name
             ):
                 return step.observation.content or step.action.args.get("answer", "")
-        for step in reversed(state.steps):
-            if step.observation and step.observation.success:
-                return step.observation.content
+
+        # Check for any successful step
+        successful_steps = [
+            s for s in state.steps
+            if s.observation and s.observation.success and s.action and s.action.tool_name
+        ]
+        failed_steps = [
+            s for s in state.steps
+            if s.observation and not s.observation.success and s.action and s.action.tool_name
+        ]
+
+        if successful_steps:
+            return successful_steps[-1].observation.content
+
+        # All steps failed — return structured failure message
+        if failed_steps:
+            error_lines: list[str] = []
+            seen_tools: set[str] = set()
+            for s in failed_steps:
+                tool_name = s.action.tool_name
+                if tool_name not in seen_tools:
+                    seen_tools.add(tool_name)
+                    reason = s.observation.content[:200]
+                    if len(s.observation.content) > 200:
+                        reason += "..."
+                    error_lines.append(f"- {tool_name}: {reason}")
+            failure_summary = "\n".join(error_lines)
+            return (
+                f"Failed to complete the task. The following tools encountered issues "
+                f"during execution:\n{failure_summary}\n"
+                f"It is recommended to check tool configuration or use an alternative approach."
+            )
+
         return f"Processed: {user_input}"

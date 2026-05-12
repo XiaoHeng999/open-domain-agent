@@ -45,22 +45,24 @@ class SSRFProtector:
             parsed = urlparse(url)
             hostname = parsed.hostname
         except Exception:
-            return SafetyCheckResult(safe=False, reason="Invalid URL")
+            return SafetyCheckResult(safe=False, reason="Invalid URL", risk_level="blocked")
 
         if not hostname:
-            return SafetyCheckResult(safe=False, reason="No hostname in URL")
+            return SafetyCheckResult(safe=False, reason="No hostname in URL", risk_level="blocked")
 
         # Check blocked hosts
         if hostname.lower() in _BLOCKED_HOSTS:
             return SafetyCheckResult(
-                safe=False, reason=f"Cloud metadata endpoint blocked: {hostname}"
+                safe=False, reason=f"Cloud metadata endpoint blocked: {hostname}",
+                risk_level="blocked",
             )
 
         # Check private domain patterns
         for pattern in _PRIVATE_DOMAIN_PATTERNS:
             if pattern.search(hostname):
                 return SafetyCheckResult(
-                    safe=False, reason=f"Private domain blocked: {hostname}"
+                    safe=False, reason=f"Private domain blocked: {hostname}",
+                    risk_level="blocked",
                 )
 
         # Check if hostname resolves to private IP
@@ -68,23 +70,24 @@ class SSRFProtector:
         if not ip_result.safe:
             return ip_result
 
-        return SafetyCheckResult(safe=True)
+        return SafetyCheckResult(safe=True, risk_level="safe")
 
     def check_ip(self, ip_str: str) -> SafetyCheckResult:
         """Check if an IP address is in a private/blocked range."""
         try:
             addr = ipaddress.ip_address(ip_str)
         except ValueError:
-            return SafetyCheckResult(safe=False, reason=f"Invalid IP: {ip_str}")
+            return SafetyCheckResult(safe=False, reason=f"Invalid IP: {ip_str}", risk_level="blocked")
 
         for network in _PRIVATE_NETWORKS:
             if addr in network:
                 return SafetyCheckResult(
                     safe=False,
                     reason=f"Private/blocked IP range: {network}",
+                    risk_level="blocked",
                 )
 
-        return SafetyCheckResult(safe=True)
+        return SafetyCheckResult(safe=True, risk_level="safe")
 
     def _check_hostname_ip(self, hostname: str) -> SafetyCheckResult:
         """Check if hostname is a literal IP in a private range."""
@@ -93,7 +96,7 @@ class SSRFProtector:
             return self.check_ip(str(addr))
         except ValueError:
             pass  # Not a literal IP, OK for now (DNS resolution check deferred)
-        return SafetyCheckResult(safe=True)
+        return SafetyCheckResult(safe=True, risk_level="safe")
 
     def check_resolved_ip(self, ip_str: str, original_hostname: str) -> SafetyCheckResult:
         """DNS rebinding defense — check resolved IP after DNS lookup."""
@@ -102,5 +105,6 @@ class SSRFProtector:
             return SafetyCheckResult(
                 safe=False,
                 reason=f"DNS rebinding detected: {original_hostname} resolved to private IP {ip_str}",
+                risk_level="blocked",
             )
-        return SafetyCheckResult(safe=True)
+        return SafetyCheckResult(safe=True, risk_level="safe")

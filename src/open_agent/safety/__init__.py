@@ -32,17 +32,17 @@ class SafetyManager:
 
     def check_command(self, command: str) -> SafetyCheckResult:
         if self.level == "off":
-            return SafetyCheckResult(safe=True)
+            return SafetyCheckResult(safe=True, risk_level="safe")
         return self.command_checker.check(command)
 
     def check_url(self, url: str) -> SafetyCheckResult:
         if self.level == "off":
-            return SafetyCheckResult(safe=True)
+            return SafetyCheckResult(safe=True, risk_level="safe")
         return self.ssrf_protector.check_url(url)
 
     def check_path(self, path: str, allow_write: bool = False) -> SafetyCheckResult:
         if self.level == "off":
-            return SafetyCheckResult(safe=True)
+            return SafetyCheckResult(safe=True, risk_level="safe")
         return self.path_restrictor.check_path(path, allow_write=allow_write)
 
     def approve_operation(self, operation: str, details: dict[str, Any] | None = None) -> HITLResult:

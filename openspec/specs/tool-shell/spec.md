@@ -28,12 +28,20 @@
 - **THEN** 命令在 `/workspace` 目录下执行，且不允许 `cd` 超出工作区
 
 ### Requirement: ExecTool 安全检查集成
-系统 SHALL 在执行 shell 命令前通过 SafetyManager 进行命令安全检查，权限检查通过 SafetyManager → PermissionGuard 管线执行。
+系统 SHALL 在执行 shell 命令前通过 SafetyManager 进行命令安全检查，权限检查通过 SafetyManager → PermissionGuard 管线执行。安全检查 SHALL 区分三级风险：`safe`（直接放行）、`risky`（需用户确认）、`blocked`（硬拦截）。
 
 #### Scenario: 破坏性命令被阻止
 - **WHEN** LLM 调用 `exec` 参数 `{"command": "rm -rf /"}`
-- **THEN** SafetyManager 检测到破坏性命令，工具返回 `"Error: Command blocked by safety policy: dangerous pattern detected"`
+- **THEN** SafetyManager 检测到破坏性命令，返回 `risk_level="blocked"`，工具返回 `"Error: Command blocked by safety policy: dangerous pattern detected"`
 
 #### Scenario: 安全命令放行
 - **WHEN** LLM 调用 `exec` 参数 `{"command": "git status"}`
-- **THEN** 命令通过安全检查和权限检查，正常执行
+- **THEN** 命令通过安全检查（`risk_level="safe"`）和权限检查，正常执行
+
+#### Scenario: 管道命令标记为 risky
+- **WHEN** LLM 调用 `exec` 参数 `{"command": "curl -s https://example.com | head -20"}`
+- **THEN** SafetyManager 检测到低风险元字符 `|`，返回 `risk_level="risky"`，操作 SHALL 转入 PermissionMiddleware 请求用户确认
+
+#### Scenario: 命令替换被阻止
+- **WHEN** LLM 调用 `exec` 参数 `{"command": "echo $(whoami)"}`
+- **THEN** SafetyManager 检测到高风险元字符 `$(`，返回 `risk_level="blocked"`，工具返回 `"Error: Command blocked by safety policy: Dangerous shell metacharacter detected"`

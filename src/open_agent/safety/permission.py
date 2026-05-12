@@ -156,6 +156,7 @@ class PermissionGuard:
         self,
         tool_name: str,
         params: dict[str, Any],
+        safety_risks: list[Any] | None = None,
     ) -> PermissionResult:
         """Ask user via HITL approval manager. Defaults to deny in non-interactive mode."""
         if self._hitl is None:
@@ -166,7 +167,7 @@ class PermissionGuard:
 
         operation = f"{tool_name}({', '.join(f'{k}={v!r}' for k, v in params.items())})"
         details = dict(params)
-        hitl_result = self._hitl.approve(operation, details)
+        hitl_result = self._hitl.approve(operation, details, safety_risks=safety_risks)
 
         if hitl_result.approved:
             return PermissionResult(
@@ -177,3 +178,31 @@ class PermissionGuard:
             decision=PermissionDecision.DENY,
             reason=f"Rejected by user: {hitl_result.reason or 'user denied'}",
         )
+
+    def check_with_safety(
+        self,
+        tool_name: str,
+        params: dict[str, Any],
+        tool_meta: dict[str, Any] | None,
+        safety_risks: list[Any],
+    ) -> PermissionResult:
+        """Permission check triggered by safety risk escalation."""
+        meta = tool_meta or {}
+        read_only = meta.get("read_only", False)
+
+        # In unrestricted mode, auto-approve
+        if self._mode == PermissionMode.UNRESTRICTED:
+            return PermissionResult(
+                decision=PermissionDecision.ALLOW,
+                reason="Unrestricted mode auto-approved risky safety check",
+            )
+
+        # For conservative mode, deny risky operations
+        if self._mode == PermissionMode.CONSERVATIVE:
+            return PermissionResult(
+                decision=PermissionDecision.DENY,
+                reason="Risky operation blocked in conservative mode",
+            )
+
+        # For cautious/fluent modes: ask user with safety context
+        return self._ask_user(tool_name, params, safety_risks=safety_risks)

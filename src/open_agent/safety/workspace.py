@@ -29,13 +29,14 @@ class PathRestrictor:
         try:
             resolved = Path(path).resolve()
         except Exception:
-            return SafetyCheckResult(safe=False, reason=f"Invalid path: {path}")
+            return SafetyCheckResult(safe=False, reason=f"Invalid path: {path}", risk_level="blocked")
 
         # Check path traversal
         if not self._is_within_workspace(resolved) and resolved not in self._trusted_paths:
             return SafetyCheckResult(
                 safe=False,
                 reason=f"Path outside workspace: {resolved} (workspace: {self._workspace})",
+                risk_level="blocked",
             )
 
         # Check sensitive file
@@ -43,9 +44,10 @@ class PathRestrictor:
             return SafetyCheckResult(
                 safe=False,
                 reason=f"Sensitive file protected: {resolved.name}",
+                risk_level="blocked",
             )
 
-        return SafetyCheckResult(safe=True)
+        return SafetyCheckResult(safe=True, risk_level="safe")
 
     def _is_within_workspace(self, path: Path) -> bool:
         try:

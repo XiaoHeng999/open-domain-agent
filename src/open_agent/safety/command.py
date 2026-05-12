@@ -6,12 +6,16 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-# Dangerous shell metacharacters that can bypass whitelist
-_DANGEROUS_METACHAR_PATTERNS: list[re.Pattern[str]] = [
-    re.compile(r";"),           # command separator
+# Low-risk shell metacharacters — produce "risky" result, can be user-approved
+_LOW_RISK_METACHAR_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"\|"),          # pipe
     re.compile(r"&&"),          # AND operator
     re.compile(r"\|\|"),        # OR operator
+]
+
+# High-risk shell metacharacters — produce "blocked" result, hard block
+_HIGH_RISK_METACHAR_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r";"),           # command separator
     re.compile(r"\$\("),        # command substitution
     re.compile(r"`"),           # backtick substitution
     re.compile(r">"),           # redirect
@@ -49,9 +53,10 @@ class SafetyCheckResult:
     safe: bool
     reason: str = ""
     matched_pattern: str | None = None
+    risk_level: str | None = None  # "safe" / "risky" / "blocked"
 
     def to_dict(self) -> dict[str, Any]:
-        return {"safe": self.safe, "reason": self.reason}
+        return {"safe": self.safe, "reason": self.reason, "risk_level": self.risk_level}
 
 
 class CommandSafetyChecker:
@@ -70,15 +75,26 @@ class CommandSafetyChecker:
     def check(self, command: str) -> SafetyCheckResult:
         """Check if a command is safe to execute."""
         if not command.strip():
-            return SafetyCheckResult(safe=True)
+            return SafetyCheckResult(safe=True, risk_level="safe")
 
-        # Check for dangerous shell metacharacters first (prevents whitelist bypass)
-        for pattern in _DANGEROUS_METACHAR_PATTERNS:
+        # Check for high-risk shell metacharacters first (hard block)
+        for pattern in _HIGH_RISK_METACHAR_PATTERNS:
             if pattern.search(command):
                 return SafetyCheckResult(
                     safe=False,
-                    reason=f"Dangerous shell metacharacter detected",
+                    reason="Dangerous shell metacharacter detected",
                     matched_pattern=pattern.pattern,
+                    risk_level="blocked",
+                )
+
+        # Check for low-risk shell metacharacters (can be user-approved)
+        for pattern in _LOW_RISK_METACHAR_PATTERNS:
+            if pattern.search(command):
+                return SafetyCheckResult(
+                    safe=False,
+                    reason=f"Low-risk shell metacharacter detected",
+                    matched_pattern=pattern.pattern,
+                    risk_level="risky",
                 )
 
         # Whitelist mode: only allow known-safe commands
@@ -89,8 +105,9 @@ class CommandSafetyChecker:
                     safe=False,
                     reason=f"Command not in whitelist: {cmd_prefix}",
                     matched_pattern="whitelist",
+                    risk_level="blocked",
                 )
-            return SafetyCheckResult(safe=True)
+            return SafetyCheckResult(safe=True, risk_level="safe")
 
         # Blacklist mode: check against dangerous patterns
         for pattern in self._patterns:
@@ -99,6 +116,7 @@ class CommandSafetyChecker:
                     safe=False,
                     reason=f"Dangerous command pattern matched",
                     matched_pattern=pattern.pattern,
+                    risk_level="blocked",
                 )
 
-        return SafetyCheckResult(safe=True)
+        return SafetyCheckResult(safe=True, risk_level="safe")

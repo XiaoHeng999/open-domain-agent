@@ -17,6 +17,17 @@ from open_agent.tools.base import Tool
 
 
 @dataclass
+class SafetyRisk:
+    """Safety risk information passed between SafetyMiddleware and PermissionMiddleware."""
+
+    tool_name: str
+    check_type: str
+    reason: str
+    risk_level: str  # "risky"
+    matched_pattern: str | None = None
+
+
+@dataclass
 class MiddlewareContext:
     """Context passed through the middleware chain."""
 
@@ -26,6 +37,7 @@ class MiddlewareContext:
     safety_manager: Any = None
     permission_guard: Any = None
     max_tool_result_tokens: int = 2000
+    safety_risks: list[SafetyRisk] = field(default_factory=list)
 
 
 # Type aliases
@@ -48,7 +60,19 @@ class ExecutionMiddleware:
 
 
 class SafetyMiddleware(ExecutionMiddleware):
-    """Run safety checks before execution."""
+    """Run safety checks before execution.
+
+    Supports two safety_checks declaration formats:
+    - Pure string "url" → equivalent to {"type": "url", "param": "url"}
+    - Explicit mapping {"type": "url", "param": "target_url"}
+    """
+
+    @staticmethod
+    def _resolve_check(check: str | dict[str, str]) -> tuple[str, str]:
+        """Resolve a safety check declaration to (check_type, param_name)."""
+        if isinstance(check, str):
+            return check, check
+        return check["type"], check.get("param", check["type"])
 
     async def process(
         self,
@@ -56,34 +80,71 @@ class SafetyMiddleware(ExecutionMiddleware):
         next: NextMiddleware,
     ) -> str:
         if context.safety_manager is not None:
-            for check_type in context.tool.safety_checks:
+            for check_decl in context.tool.safety_checks:
+                check_type, param_name = self._resolve_check(check_decl)
+
+                # Skip check if param not present in request
+                if param_name not in context.params:
+                    continue
+
+                value = context.params[param_name]
+
                 if check_type == "command":
-                    command = context.params.get("command", "")
-                    result = context.safety_manager.check_command(command)
-                    if not result.safe:
-                        return f"Error: Command blocked by safety policy: {result.reason}"
+                    result = context.safety_manager.check_command(value)
                 elif check_type == "url":
-                    url = context.params.get("url", "")
-                    result = context.safety_manager.check_url(url)
-                    if not result.safe:
-                        return f"Error: URL blocked by safety policy: {result.reason}"
+                    result = context.safety_manager.check_url(value)
                 elif check_type == "path":
-                    path = context.params.get("path", "")
                     allow_write = not context.tool.read_only
-                    result = context.safety_manager.check_path(path, allow_write=allow_write)
-                    if not result.safe:
-                        return f"Error: Path blocked by safety policy: {result.reason}"
+                    result = context.safety_manager.check_path(value, allow_write=allow_write)
+                else:
+                    continue
+
+                if result.risk_level == "blocked":
+                    return f"Error: {check_type.capitalize()} blocked by safety policy: {result.reason}"
+
+                if result.risk_level == "risky":
+                    context.safety_risks.append(SafetyRisk(
+                        tool_name=context.tool_name,
+                        check_type=check_type,
+                        reason=result.reason,
+                        risk_level="risky",
+                        matched_pattern=result.matched_pattern,
+                    ))
+                # "safe" → continue without action
+
         return await next()
 
 
 class PermissionMiddleware(ExecutionMiddleware):
-    """Check permissions before execution."""
+    """Check permissions before execution.
+
+    Also checks context.safety_risks from SafetyMiddleware — risky-level
+    safety risks trigger HITL confirmation when not in unrestricted mode.
+    """
 
     async def process(
         self,
         context: MiddlewareContext,
         next: NextMiddleware,
     ) -> str:
+        # Handle safety risk escalation
+        if context.safety_risks and context.permission_guard is not None:
+            from open_agent.safety.permission import PermissionMode
+
+            risky_risks = [r for r in context.safety_risks if r.risk_level == "risky"]
+            if risky_risks:
+                # In unrestricted mode, auto-approve risky operations
+                if context.permission_guard._mode != PermissionMode.UNRESTRICTED:
+                    from open_agent.safety.permission import PermissionDecision
+                    perm_result = context.permission_guard.check_with_safety(
+                        context.tool_name, context.params,
+                        {"read_only": context.tool.read_only},
+                        risky_risks,
+                    )
+                    if perm_result.decision == PermissionDecision.DENY:
+                        return f"Error: Permission denied: {perm_result.reason}"
+
+        # Standard permission check
         if context.permission_guard is not None:
             from open_agent.safety.permission import PermissionDecision
             tool_meta = {"read_only": context.tool.read_only}

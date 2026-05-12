@@ -64,7 +64,12 @@ class HITLApprovalManager:
 
         return HITLLevel.READ
 
-    def approve(self, operation: str, details: dict[str, Any] | None = None) -> HITLResult:
+    def approve(
+        self,
+        operation: str,
+        details: dict[str, Any] | None = None,
+        safety_risks: list[Any] | None = None,
+    ) -> HITLResult:
         """Check if an operation is approved based on its level."""
         level = self.classify_operation(operation, details)
         summary = self._build_summary(operation, details)
@@ -106,7 +111,7 @@ class HITLApprovalManager:
             )
 
         if self._interactive:
-            approved = self._ask_human(summary, operation, details)
+            approved = self._ask_human(summary, operation, details, safety_risks=safety_risks)
         else:
             approved = False
 
@@ -140,6 +145,7 @@ class HITLApprovalManager:
         summary: str,
         operation: str,
         details: dict[str, Any] | None,
+        safety_risks: list[Any] | None = None,
     ) -> str:
         """Build a structured approval prompt with risk level, target, and guidance."""
         # Extract key info
@@ -160,6 +166,16 @@ class HITLApprovalManager:
         ]
         if target:
             lines.append(f"  [dim]Target:[/dim]    {target}")
+
+        # Safety risk context
+        if safety_risks:
+            for risk in safety_risks:
+                rule_info = risk.matched_pattern or risk.check_type
+                lines.append(f"  [bold orange1]\\[SAFETY][/bold orange1] {risk.reason} (rule: {rule_info})")
+                # Suggest alternatives based on check type
+                if risk.check_type == "command":
+                    lines.append(f"  [dim]Suggestion:[/dim] Consider using web_search or a safer alternative")
+
         lines.append("  [dim]Choose:[/dim]    [y] confirm / [n] reject / [d] view details")
         return "\n".join(lines)
 
@@ -168,6 +184,7 @@ class HITLApprovalManager:
         summary: str,
         operation: str = "",
         details: dict[str, Any] | None = None,
+        safety_risks: list[Any] | None = None,
     ) -> bool:
         """Interactive human confirmation via Rich CLI."""
         try:
@@ -176,7 +193,9 @@ class HITLApprovalManager:
 
             console = Console()
             level = self.classify_operation(operation, details).value.upper()
-            prompt_text = self._format_approval_prompt(level, summary, operation, details)
+            prompt_text = self._format_approval_prompt(
+                level, summary, operation, details, safety_risks=safety_risks,
+            )
             console.print(Panel(prompt_text, border_style="yellow"))
 
             while True:

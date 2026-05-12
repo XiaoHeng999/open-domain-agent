@@ -34,7 +34,7 @@ class DuckDuckGoSearchTool(Tool):
 
     @property
     def safety_checks(self) -> list[str]:
-        return ["url"]
+        return []
 
     async def execute(self, **kwargs: Any) -> str:
         query = kwargs.get("query", "")
@@ -98,7 +98,7 @@ class BraveSearchTool(Tool):
 
     @property
     def safety_checks(self) -> list[str]:
-        return ["url"]
+        return []
 
     async def execute(self, **kwargs: Any) -> str:
         if not self._api_key:
