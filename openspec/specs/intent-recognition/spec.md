@@ -1,42 +1,57 @@
-## MODIFIED Requirements
+## ADDED Requirements
 
-### Requirement: 三阶段路由管线
-系统 SHALL 提供三阶段路由：Complexity Judge（判断 simple/medium/complex）→ Domain Router（路由到 domain agent）→ Intent Parser（提取结构化 intent + slots）。主路径 SHALL 使用 UnifiedLLMRouter 单次 LLM 调用；无 provider 或 LLM 失败时 SHALL fallback 到 rule-based 三阶段管线。
+### Requirement: Domain system prompt 注入 ReAct prompt
+系统 SHALL 将 `routing_decision.domain.system_prompt` 注入到 ReAct loop 的 system prompt 中，使不同 domain 的 agent 使用不同的 system prompt。
 
-#### Scenario: 简单任务快速路径
-- **WHEN** 用户输入 "今天天气怎么样"
-- **THEN** 路由判定为 simple（confidence > 0.9），跳过 planning step，直接进入 ReAct 循环
+#### Scenario: coding domain 使用 coding system prompt
+- **WHEN** 路由结果 domain="coding"，system_prompt="You are an expert coding assistant..."
+- **THEN** ReAct loop 的 system prompt 以 coding system prompt 开头，而非默认通用 prompt
+
+#### Scenario: general domain 使用默认 system prompt
+- **WHEN** 路由结果 domain="general"，system_prompt 为通用 prompt
+- **THEN** ReAct loop 使用通用 system prompt
+
+### Requirement: skip_planning 控制 PlanGenerator 调用
+系统 SHALL 根据 `routing_decision.skip_planning` 决定是否调用 `PlanGenerator.generate()`。skip_planning=True 时跳过规划直接进入 ReAct 循环；skip_planning=False 时先调用 PlanGenerator 生成计划，再将计划注入 ReAct context。
 
 #### Scenario: 复杂任务触发规划
-- **WHEN** 用户输入 "调研三个竞品并生成对比报告"
-- **THEN** 路由判定为 complex，domain 路由到 search，intent 提取 intent=research_compare、slots={targets: 3, output: report}，触发 PlanGenerator
+- **WHEN** routing_decision.complexity="complex" 且 confidence < fast_path_confidence
+- **THEN** AgentRuntime 调用 plan_generator.generate()，生成的 Plan 注入 ReAct loop 的 context
 
-#### Scenario: 路由到不同 domain agent
-- **WHEN** 用户输入 "帮我写一个排序函数"
-- **THEN** 路由到 coding domain，使用 coding system prompt，上下文与其他 domain 隔离
+#### Scenario: 简单任务跳过规划
+- **WHEN** routing_decision.complexity="simple" 且 confidence >= fast_path_confidence
+- **THEN** 跳过 PlanGenerator，直接进入 ReAct 循环
 
-#### Scenario: LLM 路由失败 fallback
-- **WHEN** UnifiedLLMRouter LLM 调用超时
-- **THEN** fallback 到 keyword 三阶段管线，trace 中记录 method="rule_fallback"
+### Requirement: Missing slots 澄清流程
+系统 SHALL 在 routing 结果的 `missing_slots` 非空时，生成澄清问题直接返回给用户，不进入 ReAct loop。澄清问题 SHALL 针对缺失的槽位逐个询问。RoutingPipeline.route() SHALL 接受可选的 `history` 参数并透传给 UnifiedLLMRouter，使 missing_slots 的判定能基于对话上下文而非仅当前输入。
 
-### Requirement: Complexity Judge
-系统 SHALL 实现任务复杂度判断，输出 complexity (simple/medium/complex) + confidence，支持 rule-based 和 LLM 两种实现。
+#### Scenario: 槽位缺失触发澄清
+- **WHEN** 用户输入 "帮我搜索数据" 且 history 为空，路由提取 intent="search_data"、missing_slots=["data_source","time_range"]
+- **THEN** AgentRuntime 返回澄清问题 "请提供以下信息：data_source, time_range"，不执行 ReAct loop
 
-#### Scenario: Rule-based 快速判断
-- **WHEN** 用户输入短于 50 字且不包含多步骤关键词
-- **THEN** Complexity Judge 直接返回 simple，不调用 LLM，latency < 10ms
+#### Scenario: 槽位完整正常执行
+- **WHEN** 用户输入 "搜索2024年财报数据" 且 missing_slots=[]
+- **THEN** 正常进入 ReAct loop 执行
 
-#### Scenario: LLM 辅助判断
-- **WHEN** rule-based 判断 confidence < 0.7
-- **THEN** 调用 UnifiedLLMRouter 进行路由，返回 complexity（含 medium 档位）+ confidence + reason
+#### Scenario: 多轮对话从历史推断槽位避免误澄清
+- **WHEN** history 包含上一轮 `user:"2+2等于几？"` 和 `assistant:"2+2=4"`，当前用户输入 "再加100等于几？" 且路由从历史推断出 base_number=4
+- **THEN** missing_slots=[]，正常进入 ReAct loop 执行，不触发澄清
 
-### Requirement: Intent Parser
-系统 SHALL 在 domain 内提取结构化 intent 和 slots，支持必需参数缺失时生成澄清问题。澄清问题 SHALL 在 runtime 中实际触发，阻断 ReAct loop 执行。
+#### Scenario: RoutingPipeline 透传 history 到 UnifiedLLMRouter
+- **WHEN** runtime 调用 `routing_pipeline.route(user_input, history=[...])` 且使用 unified LLM 路径
+- **THEN** RoutingPipeline 将 history 透传给 `UnifiedLLMRouter.route(user_input, history=history)`
 
-#### Scenario: 完整 intent 提取
-- **WHEN** 用户输入 "搜索2024年的财报数据"
-- **THEN** Intent Parser 提取 intent="search_report"、slots={year: "2024", type: "财报"}、missing_slots=[]
+#### Scenario: Keyword fallback 不使用 history
+- **WHEN** UnifiedLLMRouter 调用失败 fallback 到 keyword 管线
+- **THEN** keyword 管线不使用 history，仍按原有 keyword 匹配逻辑执行
 
-#### Scenario: 槽位缺失触发澄清（runtime 接入）
-- **WHEN** intent 已识别但 missing_slots 非空
-- **THEN** runtime 直接返回澄清问题给用户，不进入 ReAct loop
+### Requirement: Routing config domains 传递
+系统 SHALL 将 `RoutingConfig.domains` 传递到 `DomainRouter` 和 `UnifiedLLMRouter`，使 YAML/ENV 中配置的 domains 列表实际生效。
+
+#### Scenario: 自定义 domains 配置
+- **WHEN** YAML 配置 routing.domains=["coding", "search", "finance"]
+- **THEN** DomainRouter 和 UnifiedLLMRouter 仅使用这 3 个 domains（不含 web、general）
+
+#### Scenario: 默认 domains 配置
+- **WHEN** 未配置 routing.domains
+- **THEN** 使用默认 domains=["coding", "search", "web", "general"]

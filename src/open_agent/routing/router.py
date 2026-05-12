@@ -79,14 +79,19 @@ class RoutingPipeline(BaseComponent):
                 domains=self._domain_router._domains,
             )
 
-    async def route(self, user_input: str, trace: Trace | None = None) -> RoutingDecision:
+    async def route(
+        self,
+        user_input: str,
+        trace: Trace | None = None,
+        history: list[dict[str, str]] | None = None,
+    ) -> RoutingDecision:
         """Execute routing — unified LLM path or keyword fallback."""
         routing_span = None
         if trace:
             routing_span = trace.create_span("routing_pipeline", kind=SpanKind.ROUTING)
 
         if self._unified_router is not None:
-            decision = await self._route_unified(user_input, routing_span)
+            decision = await self._route_unified(user_input, routing_span, history=history)
         else:
             decision = await self._route_keyword(user_input, routing_span)
             decision.method = "rule"
@@ -105,9 +110,10 @@ class RoutingPipeline(BaseComponent):
 
     async def _route_unified(
         self, user_input: str, routing_span: Any,
+        history: list[dict[str, str]] | None = None,
     ) -> RoutingDecision:
         try:
-            result = await self._unified_router.route(user_input)
+            result = await self._unified_router.route(user_input, history=history)
         except Exception:
             logger.warning("Unified LLM router failed, falling back to keyword pipeline")
             decision = await self._route_keyword(user_input, routing_span)

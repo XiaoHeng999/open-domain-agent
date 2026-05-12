@@ -91,12 +91,18 @@ class UnifiedLLMRouter(BaseComponent):
         domains_description = "\n".join(lines) if lines else "- general: General-purpose assistant"
         return _SYSTEM_PROMPT_TEMPLATE.format(domains_description=domains_description)
 
-    async def route(self, user_input: str) -> UnifiedRoutingResult:
+    async def route(
+        self,
+        user_input: str,
+        history: list[dict[str, str]] | None = None,
+    ) -> UnifiedRoutingResult:
         """Route user input via a single LLM call. Raises on failure (caller handles fallback)."""
-        messages = [
+        messages: list[dict[str, str]] = [
             {"role": "system", "content": self._system_prompt},
-            {"role": "user", "content": user_input},
         ]
+        if history:
+            messages.extend(history)
+        messages.append({"role": "user", "content": user_input})
         result = await self._provider.complete_structured(
             messages,
             schema={

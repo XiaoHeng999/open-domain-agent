@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
 from open_agent.routing.complexity import RuleBasedComplexityJudge, ComplexityResult
 from open_agent.routing.domain import DomainRouter, DomainRouteResult
 from open_agent.routing.intent import IntentParser, IntentResult
 from open_agent.routing.router import RoutingPipeline, RoutingDecision
+from open_agent.routing.unified import UnifiedLLMRouter, UnifiedRoutingResult
 
 
 class TestComplexityJudge:
@@ -145,3 +148,177 @@ class TestRoutingPipeline:
         assert "complexity_accuracy" in results
         assert "domain_accuracy" in results
         assert 0.0 <= results["complexity_accuracy"] <= 1.0
+
+
+class TestUnifiedLLMRouterHistory:
+    """Task 4.1: Test UnifiedLLMRouter.route() with history parameter."""
+
+    def _make_router(self):
+        provider = AsyncMock()
+        provider.complete_structured = AsyncMock(return_value={
+            "complexity": "simple",
+            "confidence": 0.9,
+            "domain": "general",
+            "domain_candidates": ["general"],
+            "intent": "math",
+            "slots": {"base_number": 4, "increment": 100},
+            "missing_slots": [],
+            "reason": "User wants to add 100 to the previous result of 4",
+        })
+        router = UnifiedLLMRouter(provider=provider, domains={})
+        return router, provider
+
+    @pytest.mark.asyncio
+    async def test_history_injected_into_messages(self):
+        router, provider = self._make_router()
+        history = [
+            {"role": "user", "content": "2+2等于几？"},
+            {"role": "assistant", "content": "2+2=4"},
+        ]
+        await router.route("再加100等于几？", history=history)
+
+        call_args = provider.complete_structured.call_args
+        messages = call_args[0][0]
+        # system, history[0], history[1], user_input
+        assert len(messages) == 4
+        assert messages[0]["role"] == "system"
+        assert messages[1] == history[0]
+        assert messages[2] == history[1]
+        assert messages[3]["role"] == "user"
+        assert messages[3]["content"] == "再加100等于几？"
+
+    @pytest.mark.asyncio
+    async def test_no_history_backward_compatible(self):
+        router, provider = self._make_router()
+        await router.route("hello")
+
+        call_args = provider.complete_structured.call_args
+        messages = call_args[0][0]
+        assert len(messages) == 2
+        assert messages[0]["role"] == "system"
+        assert messages[1]["role"] == "user"
+
+    @pytest.mark.asyncio
+    async def test_empty_history_backward_compatible(self):
+        router, provider = self._make_router()
+        await router.route("hello", history=[])
+
+        call_args = provider.complete_structured.call_args
+        messages = call_args[0][0]
+        assert len(messages) == 2
+
+
+class TestRoutingPipelineHistoryPassthrough:
+    """Task 4.2: Test RoutingPipeline.route() history passthrough."""
+
+    @pytest.mark.asyncio
+    async def test_unified_path_receives_history(self):
+        provider = AsyncMock()
+        provider.complete_structured = AsyncMock(return_value={
+            "complexity": "simple",
+            "confidence": 0.9,
+            "domain": "general",
+            "domain_candidates": ["general"],
+            "intent": "math",
+            "slots": {},
+            "missing_slots": [],
+            "reason": "test",
+        })
+        pipeline = RoutingPipeline(routing_provider=provider)
+
+        history = [
+            {"role": "user", "content": "2+2等于几？"},
+            {"role": "assistant", "content": "2+2=4"},
+        ]
+        decision = await pipeline.route("再加100等于几？", history=history)
+        assert decision.method == "llm"
+
+        # Verify the provider received the history in messages
+        call_args = provider.complete_structured.call_args
+        messages = call_args[0][0]
+        assert len(messages) == 4  # system + 2 history + user
+        assert messages[1]["content"] == "2+2等于几？"
+
+    @pytest.mark.asyncio
+    async def test_keyword_fallback_no_history(self):
+        pipeline = RoutingPipeline()  # no routing_provider → keyword path
+        history = [{"role": "user", "content": "past"}]
+
+        decision = await pipeline.route("hello", history=history)
+        assert decision.method == "rule"
+
+    @pytest.mark.asyncio
+    async def test_no_history_default(self):
+        provider = AsyncMock()
+        provider.complete_structured = AsyncMock(return_value={
+            "complexity": "simple",
+            "confidence": 0.95,
+            "domain": "general",
+            "domain_candidates": ["general"],
+            "intent": "greet",
+            "slots": {},
+            "missing_slots": [],
+            "reason": "greeting",
+        })
+        pipeline = RoutingPipeline(routing_provider=provider)
+
+        decision = await pipeline.route("hello")
+        assert decision.method == "llm"
+
+        call_args = provider.complete_structured.call_args
+        messages = call_args[0][0]
+        assert len(messages) == 2  # system + user only
+
+
+class TestMultiTurnRoutingIntegration:
+    """Task 4.3: Multi-turn dialogue integration test."""
+
+    @pytest.mark.asyncio
+    async def test_follow_up_with_coreference(self):
+        """First turn: '2+2等于几？' → Second turn: '再加100等于几？'
+        With history, routing should infer base_number from context."""
+        provider = AsyncMock()
+        # First call: simple math question
+        # Second call: follow-up with context
+        provider.complete_structured = AsyncMock(return_value={
+            "complexity": "simple",
+            "confidence": 0.92,
+            "domain": "general",
+            "domain_candidates": ["general"],
+            "intent": "math_add",
+            "slots": {"base_number": 4, "increment": 100},
+            "missing_slots": [],
+            "reason": "User wants to add 100 to previous result of 4, inferred from history",
+        })
+        pipeline = RoutingPipeline(routing_provider=provider)
+
+        history = [
+            {"role": "user", "content": "2+2等于几？"},
+            {"role": "assistant", "content": "2+2=4"},
+        ]
+        decision = await pipeline.route("再加100等于几？", history=history)
+
+        # Should NOT have missing_slots — history provided context
+        assert decision.intent.missing_slots == []
+        assert decision.intent.slots.get("base_number") == 4
+        assert decision.intent.slots.get("increment") == 100
+        assert decision.method == "llm"
+
+    @pytest.mark.asyncio
+    async def test_no_history_triggers_missing_slots(self):
+        """Same follow-up without history should report missing_slots."""
+        provider = AsyncMock()
+        provider.complete_structured = AsyncMock(return_value={
+            "complexity": "simple",
+            "confidence": 0.85,
+            "domain": "general",
+            "domain_candidates": ["general"],
+            "intent": "math_add",
+            "slots": {},
+            "missing_slots": ["base_number"],
+            "reason": "No context, base_number is unknown",
+        })
+        pipeline = RoutingPipeline(routing_provider=provider)
+
+        decision = await pipeline.route("再加100等于几？")
+        assert "base_number" in decision.intent.missing_slots

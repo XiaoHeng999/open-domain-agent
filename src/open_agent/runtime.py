@@ -318,7 +318,15 @@ class AgentRuntime(BaseComponent):
             })
 
         # Stage 1: Routing
-        routing_decision = await self.routing_pipeline.route(user_input, trace=trace)
+        # Build routing history from runtime_memory (last 4 messages ≈ 2 turns)
+        routing_history: list[dict[str, str]] | None = None
+        if self._runtime_memory and self._runtime_memory._messages:
+            recent = self._runtime_memory._messages[-4:]
+            routing_history = [{"role": m.role, "content": m.content} for m in recent]
+
+        routing_decision = await self.routing_pipeline.route(
+            user_input, trace=trace, history=routing_history,
+        )
 
         # 5.3 Missing slots clarification — return early without entering ReAct loop
         if routing_decision.intent.missing_slots:

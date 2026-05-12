@@ -23,17 +23,6 @@
 - **WHEN** history 包含上一轮对话且当前输入含代词或省略
 - **THEN** UnifiedLLMRouter 从历史中推断完整 intent 和 slots，而非判定 missing_slots
 
-### Requirement: Complexity Judge
-系统 SHALL 实现任务复杂度判断，输出 complexity (simple/medium/complex) + confidence，支持 rule-based 和 LLM 两种实现。
-
-#### Scenario: Rule-based 快速判断
-- **WHEN** 用户输入短于 50 字且不包含多步骤关键词
-- **THEN** Complexity Judge 直接返回 simple，不调用 LLM，latency < 10ms
-
-#### Scenario: LLM 辅助判断
-- **WHEN** rule-based 判断 confidence < 0.7
-- **THEN** 调用 UnifiedLLMRouter 进行路由，返回 complexity（含 medium 档位）+ confidence + reason
-
 ### Requirement: Intent Parser
 系统 SHALL 在 domain 内提取结构化 intent 和 slots，支持必需参数缺失时生成澄清问题。澄清问题 SHALL 在 runtime 中实际触发，阻断 ReAct loop 执行。当有对话历史时，Intent Parser SHALL 能从历史上下文中推断出省略或指代的槽位值，而非仅依赖当前输入判定缺失。
 
