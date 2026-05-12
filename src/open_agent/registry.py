@@ -171,12 +171,28 @@ def scan_builtin_tools(registry: ToolRegistry, config: Any) -> None:
         from open_agent.tools.shell import ExecTool
         registry.register(ExecTool(workspace=workspace))
 
-    # Web tools
-    from open_agent.tools.web import WebFetchTool, WebSearchTool
-    api_key = getattr(
-        getattr(config, "tools", None), "brave_search_api_key", None,
-    )
-    registry.register(WebSearchTool(api_key=api_key))
+    # Web tools — conditional search backend registration
+    from open_agent.tools.web import BraveSearchTool, DuckDuckGoSearchTool, WebFetchTool
+    tools_config = getattr(config, "tools", None)
+    api_key = getattr(tools_config, "brave_search_api_key", None)
+    backend = getattr(tools_config, "search_backend", "auto")
+
+    search_tool: Tool | None = None
+    if backend == "duckduckgo":
+        search_tool = DuckDuckGoSearchTool()
+    elif backend == "brave":
+        if api_key:
+            search_tool = BraveSearchTool(api_key=api_key)
+        # else: no search tool registered — LLM won't see web_search
+    else:  # auto
+        if api_key:
+            search_tool = BraveSearchTool(api_key=api_key)
+        else:
+            search_tool = DuckDuckGoSearchTool()
+
+    if search_tool is not None:
+        registry.register(search_tool)
+
     registry.register(WebFetchTool())
 
     # Todo tool

@@ -300,8 +300,8 @@ class ReActLoop:
                         if self._runtime_memory is not None:
                             ts = self._runtime_memory.task_state
                             memory_state = {
-                                "step_count": ts.step_count,
-                                "status": ts.status,
+                                "step_count": ts.current_step,
+                                "status": "finished" if ts.finished else "running",
                             }
                         cp = self._checkpoint_manager.save_checkpoint(
                             step_number=step_num,
@@ -484,11 +484,19 @@ class ReActLoop:
                 if action.tool_use_id:
                     self._tool_messages.append({
                         "role": "assistant",
-                        "content": [{"type": "tool_use", "id": action.tool_use_id, "name": action.tool_name, "input": action.args}],
+                        "tool_calls": [{
+                            "id": action.tool_use_id,
+                            "type": "function",
+                            "function": {
+                                "name": action.tool_name,
+                                "arguments": json.dumps(action.args),
+                            },
+                        }],
                     })
                     self._tool_messages.append({
-                        "role": "user",
-                        "content": [{"type": "tool_result", "tool_use_id": action.tool_use_id, "content": content, "is_error": not success}],
+                        "role": "tool",
+                        "tool_call_id": action.tool_use_id,
+                        "content": content,
                     })
             else:
                 content = f"Tool not found: {action.tool_name}"

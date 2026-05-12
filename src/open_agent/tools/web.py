@@ -1,4 +1,4 @@
-"""Web tools — web_search (Brave Search API) and web_fetch (URL content)."""
+"""Web tools — web_search (DuckDuckGo / Brave) and web_fetch (URL content → Markdown)."""
 from __future__ import annotations
 
 from typing import Any
@@ -6,8 +6,69 @@ from typing import Any
 from open_agent.tools.base import Tool
 
 
-class WebSearchTool(Tool):
-    """Search the web using Brave Search API."""
+class DuckDuckGoSearchTool(Tool):
+    """Search the web using DuckDuckGo (free, no API key required)."""
+
+    @property
+    def name(self) -> str:
+        return "web_search"
+
+    @property
+    def description(self) -> str:
+        return "Search the web. Returns a list of results with title, URL, and snippet."
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query"},
+                "count": {"type": "integer", "description": "Max results to return (default 5)"},
+            },
+            "required": ["query"],
+        }
+
+    @property
+    def read_only(self) -> bool:
+        return True
+
+    @property
+    def safety_checks(self) -> list[str]:
+        return ["url"]
+
+    async def execute(self, **kwargs: Any) -> str:
+        query = kwargs.get("query", "")
+        count = kwargs.get("count", 5)
+
+        if not query:
+            return "Error: query is required"
+
+        try:
+            from duckduckgo_search import DDGS
+        except ImportError:
+            return "Error: duckduckgo-search is required. Install with: pip install duckduckgo-search"
+
+        try:
+            with DDGS() as ddgs:
+                results = list(ddgs.text(query, max_results=count))
+
+            if not results:
+                return f"No results found for query: {query}"
+
+            lines: list[str] = []
+            for i, r in enumerate(results[:count], 1):
+                title = r.get("title", "")
+                url = r.get("href", "")
+                snippet = r.get("body", "")
+                lines.append(f"{i}. {title}\n   URL: {url}\n   {snippet}")
+            return "\n\n".join(lines)
+
+        except Exception as e:
+            return f"Error: Search failed: {e}"
+
+
+class BraveSearchTool(Tool):
+    """Search the web using Brave Search API (requires API key)."""
 
     def __init__(self, api_key: str | None = None) -> None:
         self._api_key = api_key
@@ -18,7 +79,7 @@ class WebSearchTool(Tool):
 
     @property
     def description(self) -> str:
-        return "Search the web using Brave Search. Returns a list of results with title, URL, and snippet."
+        return "Search the web. Returns a list of results with title, URL, and snippet."
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -83,8 +144,12 @@ class WebSearchTool(Tool):
             return f"Error: Search failed: {e}"
 
 
+# Backward-compatible alias
+WebSearchTool = BraveSearchTool
+
+
 class WebFetchTool(Tool):
-    """Fetch and extract text content from a URL."""
+    """Fetch and extract content from a URL, converting HTML to Markdown."""
 
     def __init__(self, max_chars: int = 50000) -> None:
         self._max_chars = max_chars
@@ -95,7 +160,7 @@ class WebFetchTool(Tool):
 
     @property
     def description(self) -> str:
-        return "Fetch the content of a URL and return the text."
+        return "Fetch the content of a URL and return it as Markdown (for HTML) or raw text."
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -118,7 +183,6 @@ class WebFetchTool(Tool):
     async def execute(self, **kwargs: Any) -> str:
         url = kwargs.get("url", "")
 
-        # Protocol check
         if not url.startswith(("http://", "https://")):
             return "Error: Only HTTP/HTTPS URLs are supported"
 
@@ -132,6 +196,14 @@ class WebFetchTool(Tool):
                 response = await client.get(url, timeout=15, follow_redirects=True)
                 response.raise_for_status()
                 content = response.text
+
+                content_type = response.headers.get("content-type", "")
+                if "html" in content_type:
+                    try:
+                        import markdownify
+                        content = markdownify.markdownify(content)
+                    except ImportError:
+                        pass  # Return raw HTML if markdownify unavailable
 
                 if len(content) > self._max_chars:
                     content = content[:self._max_chars] + f"\n...[truncated, {len(content)} chars total]"

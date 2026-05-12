@@ -451,7 +451,7 @@ class AgentRuntime(BaseComponent):
                 alert.alert_type, alert.details
             )
             if self._profile_memory:
-                await self._profile_memory.add_avoidance_hint(hint)
+                await self._profile_memory.add_avoidance_hint(hint["hint"])
 
         # Cleanup skills
         for skill_info in matched_skills:

@@ -135,6 +135,7 @@ class ToolsConfig(BaseModel):
 
     exec_enabled: bool = True
     brave_search_api_key: Optional[str] = Field(default=None, repr=False)
+    search_backend: Literal["auto", "duckduckgo", "brave"] = "auto"
     max_tool_result_tokens: int = Field(default=2000, ge=100)
 
 
