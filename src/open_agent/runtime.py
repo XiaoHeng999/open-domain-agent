@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -10,7 +11,7 @@ from open_agent.base import BaseComponent
 from open_agent.config import AgentConfig, load_config
 from open_agent.errors import AgentError
 from open_agent.registry import ToolRegistry
-from open_agent.trace import SpanKind, Trace, TraceManager
+from open_agent.trace import SpanKind, Trace, TraceManager, setup_structured_logging
 from open_agent.routing.router import RoutingPipeline, RoutingDecision
 from open_agent.agent.react import ReActLoop
 from open_agent.agent.planner import PlanGenerator
@@ -32,6 +33,8 @@ from open_agent.prompt.builder import PromptBuilder
 from open_agent.hooks import HookEvent, HookManager
 from open_agent.hooks.builtin import welcome_hook, pre_check_hook, audit_hook
 from open_agent.mcp_integration import MCPServerManager, ServerConfig, TransportType
+
+logger = logging.getLogger("open_agent")
 
 
 @dataclass
@@ -139,6 +142,9 @@ class AgentRuntime(BaseComponent):
     async def on_start(self) -> None:
         """Initialize all subsystems."""
         await super().on_start()
+
+        # Activate structured logging
+        self._logger = setup_structured_logging()
 
         # Provider
         await self.provider.on_start()
@@ -452,6 +458,15 @@ class AgentRuntime(BaseComponent):
             self.skill_matcher.cleanup(routing_decision.domain.domain, user_input)
 
         duration_ms = (time.time() - start_time) * 1000
+
+        logger.info(
+            "runtime.done trace_id=%s domain=%s intent=%s steps=%d duration=%.0fms",
+            trace.trace_id,
+            routing_decision.domain.domain,
+            routing_decision.intent.intent,
+            response.total_steps,
+            duration_ms,
+        )
 
         return AgentResponse(
             output=response.answer,

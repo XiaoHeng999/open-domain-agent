@@ -92,7 +92,7 @@ def chat(
             while True:
                 try:
                     # Read input inside the async loop so we can yield
-                    user_input = input("\033[1;36mYou:\033[0m ").strip()
+                    user_input = input("\033[1;36myour prompt:\033[0m ").strip()
                 except (KeyboardInterrupt, EOFError):
                     break
                 if user_input.lower() in ("exit", "quit"):
@@ -103,6 +103,17 @@ def chat(
                 try:
                     response = await runtime.run(user_input)
 
+                    # Routing summary
+                    if response.routing:
+                        rd = response.routing
+                        console.print(
+                            f"[dim]🔧 Routing → "
+                            f"complexity={rd.complexity.complexity} "
+                            f"domain={rd.domain.domain} "
+                            f"intent={rd.intent.intent} "
+                            f"method={rd.method}[/dim]"
+                        )
+
                     # Display steps
                     for i, step_info in enumerate(response.metadata.get("steps", [])):
                         console.print(f"[bold cyan]Step {i + 1}:[/]")
@@ -111,11 +122,13 @@ def chat(
                         if step_info.get("action"):
                             console.print(f"  [blue]Action:[/] {step_info['action']}")
                         if step_info.get("observation"):
-                            console.print(f"  [green]Observation:[/] {step_info['observation']}")
+                            obs_text = step_info['observation']
+                            preview = obs_text[:200] + "..." if len(obs_text) > 200 else obs_text
+                            console.print(f"  [green]Observation:[/] {preview}")
 
                     console.print(f"\n[bold green]Answer:[/] {response.output}")
                     console.print(
-                        f"[dim]Trace: {response.trace_id} | "
+                        f"[dim]📊 Trace: {response.trace_id} | "
                         f"Steps: {response.metadata.get('total_steps', '?')} | "
                         f"Duration: {response.duration_ms:.0f}ms[/dim]\n"
                     )

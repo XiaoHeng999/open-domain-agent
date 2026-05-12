@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -208,6 +209,7 @@ class ReActLoop:
 
         try:
             for iteration in range(start_iteration, self._max_iterations):
+                logger.info("react.iteration.start iter=%d/%d", iteration + 1, self._max_iterations)
                 step = ReActStep(index=iteration)
 
                 # Increment task state
@@ -335,6 +337,12 @@ class ReActLoop:
             root_span.set_attribute("total_steps", len(state.steps))
             root_span.finish()
 
+        logger.info(
+            "react.done steps=%d final_answer=%s",
+            len(state.steps),
+            state.final_answer[:80],
+        )
+
         return AgentResponse(
             answer=state.final_answer,
             state=state,
@@ -409,6 +417,15 @@ class ReActLoop:
                 span.set_attribute("tool_names", [a.tool_name for a in actions])
             span.finish()
 
+        if actions:
+            logger.info(
+                "react.think_and_act tools=%s thought=%s",
+                [a.tool_name for a in actions],
+                thought_content[:80],
+            )
+        else:
+            logger.info("react.think_and_act tools=[] (direct answer)")
+
         return thought_content, actions
 
     async def _execute_action(
@@ -418,6 +435,7 @@ class ReActLoop:
         trace: Trace | None,
     ) -> Observation:
         span = self._begin_step_span(trace, "observation", iteration)
+        _exec_start = time.monotonic()
 
         # Staleness reminder injection
         staleness_prefix = self._check_staleness()
@@ -530,6 +548,12 @@ class ReActLoop:
         if span:
             span.set_attribute("success", success)
             span.finish()
+
+        _exec_ms = (time.monotonic() - _exec_start) * 1000
+        logger.info(
+            "react.execute_action tool=%s success=%s duration=%.1fms result_len=%d",
+            action.tool_name, success, _exec_ms, len(content),
+        )
 
         return Observation(
             content=content,

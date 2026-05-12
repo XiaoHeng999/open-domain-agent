@@ -151,9 +151,11 @@ def setup_structured_logging(level: int = logging.INFO) -> logging.Logger:
                 log_entry["exception"] = self.formatException(record.exc_info)
             return json.dumps(log_entry, ensure_ascii=False)
 
-    logger = logging.getLogger("open_agent")
-    handler = logging.StreamHandler()
-    handler.setFormatter(JSONFormatter())
-    logger.addHandler(handler)
-    logger.setLevel(level)
-    return logger
+    _logger = logging.getLogger("open_agent")
+    # Avoid adding duplicate handlers on repeated calls
+    if not any(isinstance(h.formatter, JSONFormatter) for h in _logger.handlers):
+        handler = logging.StreamHandler()
+        handler.setFormatter(JSONFormatter())
+        _logger.addHandler(handler)
+    _logger.setLevel(level)
+    return _logger

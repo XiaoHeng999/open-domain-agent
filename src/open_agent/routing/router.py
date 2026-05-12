@@ -114,6 +114,10 @@ class RoutingPipeline(BaseComponent):
     ) -> RoutingDecision:
         try:
             result = await self._unified_router.route(user_input, history=history)
+            logger.info(
+                "routing.unified domain=%s complexity=%s intent=%s confidence=%.2f",
+                result.domain, result.complexity, result.intent, result.confidence,
+            )
         except Exception:
             logger.warning("Unified LLM router failed, falling back to keyword pipeline")
             decision = await self._route_keyword(user_input, routing_span)
@@ -164,9 +168,22 @@ class RoutingPipeline(BaseComponent):
             complexity = await self._complexity_judge.judge(user_input)
         else:
             complexity = self._complexity_judge.judge(user_input)
+        logger.info(
+            "routing.complexity complexity=%s confidence=%.2f method=%s",
+            complexity.complexity, complexity.confidence, complexity.method,
+        )
 
         domain = self._domain_router.route(user_input)
+        logger.info(
+            "routing.domain domain=%s candidates=%s",
+            domain.domain, domain.candidates,
+        )
+
         intent = await self._intent_parser.parse(user_input, domain.domain)
+        logger.info(
+            "routing.intent intent=%s slots=%s",
+            intent.intent, intent.slots,
+        )
 
         skip_planning = (
             complexity.complexity == "simple"

@@ -25,7 +25,7 @@ _HELLO_LUCKY_ART = r"""
                                                   |___/
 """
 
-_WELCOME_TEXT = "HELLO! LUCKY! — Your agent session has started."
+_WELCOME_TEXT = "HELLO!"
 
 
 def welcome_hook(context: dict[str, Any]) -> HookResult:
