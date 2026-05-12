@@ -173,6 +173,26 @@ class MCPConfig(BaseModel):
     tool_discovery_timeout: int = Field(default=30, ge=1)
 
 
+class SubagentPresetConfig(BaseModel):
+    """User-defined or overridden sub-agent preset from config."""
+
+    name: str
+    system_prompt: str = ""
+    allowed_tools: list[str] = Field(default_factory=list)
+    max_turns: int = 10
+    description: str = ""
+
+
+class SubagentConfig(BaseModel):
+    """Sub-agent (agent-as-a-tool) configuration."""
+
+    enabled: bool = True
+    max_concurrent: int = Field(default=5, ge=1)
+    max_children: int = Field(default=3, ge=1)
+    default_max_turns: int = Field(default=10, ge=1)
+    presets: list[SubagentPresetConfig] = Field(default_factory=list)
+
+
 class AgentConfig(BaseModel):
     """Top-level agent configuration."""
 
@@ -187,6 +207,7 @@ class AgentConfig(BaseModel):
     hooks: HooksConfig = Field(default_factory=HooksConfig)
     permissions: PermissionConfig = Field(default_factory=PermissionConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)
+    subagent: SubagentConfig = Field(default_factory=SubagentConfig)
 
     workspace: str = "."
 

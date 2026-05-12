@@ -129,5 +129,18 @@ trace:
 #   connect_timeout: 10
 #   tool_discovery_timeout: 30
 
+# Sub-agent (agent-as-a-tool) configuration
+# subagent:
+#   enabled: true
+#   max_concurrent: 5
+#   max_children: 3
+#   default_max_turns: 10
+#   presets:
+#     - name: explore
+#       system_prompt: "You are a read-only code explorer..."
+#       allowed_tools: [read_file, list_dir, web_search, web_fetch]
+#       max_turns: 20
+#       description: "Read-only codebase exploration"
+
 # Default workspace (overridden by --workspace / -w CLI flag)
 workspace: .

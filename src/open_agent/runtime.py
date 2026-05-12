@@ -33,6 +33,8 @@ from open_agent.prompt.builder import PromptBuilder
 from open_agent.hooks import HookEvent, HookManager
 from open_agent.hooks.builtin import welcome_hook, pre_check_hook, audit_hook
 from open_agent.mcp_integration import MCPServerManager, ServerConfig, TransportType
+from open_agent.subagent.manager import SubagentManager
+from open_agent.subagent.tool import SubagentTool
 
 logger = logging.getLogger("open_agent")
 
@@ -138,6 +140,9 @@ class AgentRuntime(BaseComponent):
 
         # MCP server manager
         self._mcp_manager: MCPServerManager | None = None
+
+        # Sub-agent manager
+        self._subagent_manager: SubagentManager | None = None
 
     async def on_start(self) -> None:
         """Initialize all subsystems."""
@@ -267,6 +272,21 @@ class AgentRuntime(BaseComponent):
                 return_exceptions=True,
             )
 
+        # Sub-agent: initialize manager and register SubagentTool
+        subagent_cfg = self.config.subagent
+        if subagent_cfg.enabled:
+            self._subagent_manager = SubagentManager(
+                provider=self.provider,
+                tool_registry=self.tool_registry,
+                config=subagent_cfg,
+                prompt_builder=self.prompt_builder,
+                workspace=self.config.workspace,
+            )
+            subagent_tool = SubagentTool(
+                manager=self._subagent_manager,
+            )
+            self.tool_registry.register(subagent_tool)
+
     async def _inject_sandbox_to_exec_tool(self) -> None:
         """Replace ExecTool with a sandbox-injected version, with fallback."""
         import logging
@@ -299,6 +319,9 @@ class AgentRuntime(BaseComponent):
 
     async def on_stop(self) -> None:
         """Clean up all subsystems."""
+        # Cascading stop: terminate all active sub-agents
+        if self._subagent_manager:
+            await self._subagent_manager.stop_all()
         if self._mcp_manager:
             for server_info in self._mcp_manager.list_servers():
                 await self._mcp_manager.stop_server(server_info["server_id"])

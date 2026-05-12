@@ -79,6 +79,10 @@ class SafetyMiddleware(ExecutionMiddleware):
         context: MiddlewareContext,
         next: NextMiddleware,
     ) -> str:
+        # Pass-through for subagent tool — sub-agents have their own safety chain
+        if context.tool_name == "task":
+            return await next()
+
         if context.safety_manager is not None:
             for check_decl in context.tool.safety_checks:
                 check_type, param_name = self._resolve_check(check_decl)
@@ -127,6 +131,10 @@ class PermissionMiddleware(ExecutionMiddleware):
         context: MiddlewareContext,
         next: NextMiddleware,
     ) -> str:
+        # Pass-through for subagent tool — sub-agents have independent permission control
+        if context.tool_name == "task":
+            return await next()
+
         # Handle safety risk escalation
         if context.safety_risks and context.permission_guard is not None:
             from open_agent.safety.permission import PermissionMode

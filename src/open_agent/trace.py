@@ -24,6 +24,7 @@ class SpanKind(str, Enum):
     CHECKPOINT = "checkpoint"
     RECOVERY = "recovery"
     EVAL = "eval"
+    SUBAGENT = "subagent"
     INTERNAL = "internal"
 
 
