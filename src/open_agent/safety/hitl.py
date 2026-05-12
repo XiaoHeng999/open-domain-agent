@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
+
+logger = logging.getLogger("open_agent.safety.hitl")
+
+_MAX_PREVIEW_LEN = 100
 
 
 class HITLLevel(str, Enum):
@@ -25,7 +30,7 @@ class HITLResult:
 
 
 class HITLApprovalManager:
-    """Three-tier approval: Read(auto) → Write(confirm) → Dangerous(blocked).
+    """Three-tier approval: Read(auto) -> Write(confirm) -> Dangerous(blocked).
 
     Supports session-level trust escalation: after N consecutive same-type
     approvals, auto-approve that category.
@@ -101,7 +106,7 @@ class HITLApprovalManager:
             )
 
         if self._interactive:
-            approved = self._ask_human(summary)
+            approved = self._ask_human(summary, operation, details)
         else:
             approved = False
 
@@ -117,15 +122,81 @@ class HITLApprovalManager:
             operation_summary=summary,
         )
 
-    def _ask_human(self, summary: str) -> bool:
+    # ------------------------------------------------------------------
+    # Prompt helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _truncate_value(value: Any, max_len: int = _MAX_PREVIEW_LEN) -> str:
+        """Truncate a value to max_len characters for display."""
+        text = str(value)
+        if len(text) <= max_len:
+            return text
+        return text[:max_len] + "..."
+
+    @staticmethod
+    def _format_approval_prompt(
+        level: str,
+        summary: str,
+        operation: str,
+        details: dict[str, Any] | None,
+    ) -> str:
+        """Build a structured approval prompt with risk level, target, and guidance."""
+        # Extract key info
+        target = ""
+        detail_lines: list[str] = []
+        if details:
+            for key in ("path", "url", "command", "target"):
+                val = details.get(key)
+                if val is not None:
+                    target = HITLApprovalManager._truncate_value(val)
+                    break
+            for k, v in (details or {}).items():
+                detail_lines.append(f"  {k}={HITLApprovalManager._truncate_value(v)}")
+
+        lines = [
+            f"[bold yellow]\\[{level}][/bold yellow] Operation requires approval",
+            f"  [dim]Operation:[/dim] {operation}",
+        ]
+        if target:
+            lines.append(f"  [dim]Target:[/dim]    {target}")
+        lines.append("  [dim]Choose:[/dim]    [y] confirm / [n] reject / [d] view details")
+        return "\n".join(lines)
+
+    def _ask_human(
+        self,
+        summary: str,
+        operation: str = "",
+        details: dict[str, Any] | None = None,
+    ) -> bool:
         """Interactive human confirmation via Rich CLI."""
         try:
             from rich.console import Console
+            from rich.panel import Panel
+
             console = Console()
-            console.print(f"\n[yellow]⚠ Write operation requires approval:[/yellow] {summary}")
-            response = console.input("[bold]Approve? [y/N]:[/bold] ").strip().lower()
-            return response in ("y", "yes")
+            level = self.classify_operation(operation, details).value.upper()
+            prompt_text = self._format_approval_prompt(level, summary, operation, details)
+            console.print(Panel(prompt_text, border_style="yellow"))
+
+            while True:
+                response = console.input("[bold]Your choice [y/n/d]:[/bold] ").strip().lower()
+
+                if response in ("y", "yes"):
+                    return True
+                if response in ("n", "no", ""):
+                    return False
+                if response in ("d", "detail", "details"):
+                    console.print("[dim]--- Full operation details ---[/dim]")
+                    console.print(f"  [dim]Operation:[/dim] {operation}")
+                    if details:
+                        for k, v in details.items():
+                            console.print(f"  [dim]{k}:[/dim] {v}")
+                    console.print("[dim]--- end details ---[/dim]")
+                    continue
+                console.print("[dim]Please enter y, n, or d.[/dim]")
         except Exception:
+            logger.debug("HITL prompt failed, defaulting to deny", exc_info=True)
             return False
 
     def _is_whitelisted(self, operation: str, details: dict[str, Any] | None) -> bool:
@@ -140,7 +211,7 @@ class HITLApprovalManager:
         parts = [operation]
         for key in ("path", "url", "command", "target"):
             if key in details:
-                parts.append(f"{key}={details[key]}")
+                parts.append(f"{key}={self._truncate_value(details[key])}")
         return " | ".join(parts)
 
     def reset_trust(self) -> None:

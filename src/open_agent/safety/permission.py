@@ -73,6 +73,17 @@ class PermissionGuard:
         # Stage 4: Ask user via HITL
         return self._ask_user(tool_name, params)
 
+    @staticmethod
+    def _safe_str(value: Any, field_name: str) -> str:
+        """Convert param value to str, logging if coercion was needed."""
+        if isinstance(value, str):
+            return value
+        import logging as _logging
+        _logging.getLogger("open_agent.safety.permission").debug(
+            "permission param type coercion: %s was %s, not str", field_name, type(value).__name__,
+        )
+        return str(value)
+
     def _match_rules(
         self,
         rules: list[Any],
@@ -84,15 +95,15 @@ class PermissionGuard:
             if not fnmatch(tool_name, rule.tool):
                 continue
             if rule.pattern is not None:
-                command = params.get("command", "")
+                command = self._safe_str(params.get("command", ""), "command")
                 if not fnmatch(command, rule.pattern):
                     continue
             if rule.path is not None:
-                path = params.get("path", "")
+                path = self._safe_str(params.get("path", ""), "path")
                 if not fnmatch(path, rule.path):
                     continue
             if rule.domain is not None:
-                url = params.get("url", "")
+                url = self._safe_str(params.get("url", ""), "url")
                 if rule.domain not in url:
                     continue
             parts = [f"tool={rule.tool}"]

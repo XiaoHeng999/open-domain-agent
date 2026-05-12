@@ -153,7 +153,7 @@ class TestHITL:
     def test_trust_escalation(self):
         hitl = HITLApprovalManager(trust_threshold=2, interactive=False)
         hitl._interactive = True
-        hitl._ask_human = lambda s: True  # type: ignore
+        hitl._ask_human = lambda s, op="", dt=None: True  # type: ignore
 
         r1 = hitl.approve("write_file", {"path": "/tmp/a"})
         assert r1.approved
