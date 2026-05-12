@@ -145,6 +145,33 @@ class HooksConfig(BaseModel):
     welcome_enabled: bool = True
 
 
+class MCPServerConfig(BaseModel):
+    """Configuration for a single MCP server."""
+
+    server_id: str
+    transport: Literal["stdio", "sse", "http"] = "stdio"
+    command: Optional[str] = None
+    url: Optional[str] = None
+    headers: dict[str, str] = Field(default_factory=dict)
+    health_check_interval: int = 30
+
+    @model_validator(mode="after")
+    def validate_transport_fields(self) -> "MCPServerConfig":
+        if self.transport == "stdio" and not self.command:
+            raise ValueError("stdio transport requires 'command'")
+        if self.transport in ("http", "sse") and not self.url:
+            raise ValueError(f"{self.transport} transport requires 'url'")
+        return self
+
+
+class MCPConfig(BaseModel):
+    """MCP integration configuration."""
+
+    servers: list[MCPServerConfig] = Field(default_factory=list)
+    connect_timeout: int = Field(default=10, ge=1)
+    tool_discovery_timeout: int = Field(default=30, ge=1)
+
+
 class AgentConfig(BaseModel):
     """Top-level agent configuration."""
 
@@ -158,6 +185,7 @@ class AgentConfig(BaseModel):
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     hooks: HooksConfig = Field(default_factory=HooksConfig)
     permissions: PermissionConfig = Field(default_factory=PermissionConfig)
+    mcp: MCPConfig = Field(default_factory=MCPConfig)
 
     workspace: str = "."
 
@@ -203,6 +231,16 @@ def _apply_env_overrides(data: dict[str, Any]) -> None:
             for part in path_parts[:-1]:
                 target = target.setdefault(part, {})
             target[path_parts[-1]] = val
+
+    # MCP servers from env var (JSON format)
+    mcp_servers_env = os.environ.get("OPEN_AGENT_MCP_SERVERS")
+    if mcp_servers_env:
+        import json as _json
+        try:
+            mcp_data = data.setdefault("mcp", {})
+            mcp_data["servers"] = _json.loads(mcp_servers_env)
+        except (ValueError, TypeError):
+            pass
 
 
 def _deep_merge(base: dict, override: dict) -> None:

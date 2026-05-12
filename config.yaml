@@ -111,5 +111,23 @@ trace:
   store_traces: true
   trace_dir: .open_agent/traces
 
+# MCP (Model Context Protocol) server configuration
+# Uncomment and configure to connect to external MCP tool servers
+# mcp:
+#   servers:
+#     - server_id: "db-tools"
+#       transport: stdio
+#       command: "python db_mcp_server.py"
+#     - server_id: "web-tools"
+#       transport: http
+#       url: "http://localhost:8080/mcp"
+#       headers:
+#         Authorization: "Bearer xxx"
+#     - server_id: "sse-tools"
+#       transport: sse
+#       url: "http://localhost:9090"
+#   connect_timeout: 10
+#   tool_discovery_timeout: 30
+
 # Default workspace (overridden by --workspace / -w CLI flag)
 workspace: .

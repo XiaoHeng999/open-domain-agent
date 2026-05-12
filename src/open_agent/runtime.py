@@ -31,6 +31,7 @@ from open_agent.checkpoint.manager import CheckpointManager
 from open_agent.prompt.builder import PromptBuilder
 from open_agent.hooks import HookEvent, HookManager
 from open_agent.hooks.builtin import welcome_hook, pre_check_hook, audit_hook
+from open_agent.mcp_integration import MCPServerManager, ServerConfig, TransportType
 
 
 @dataclass
@@ -131,6 +132,9 @@ class AgentRuntime(BaseComponent):
         # Checkpoint
         self.checkpoint_manager: CheckpointManager | None = None
 
+        # MCP server manager
+        self._mcp_manager: MCPServerManager | None = None
+
     async def on_start(self) -> None:
         """Initialize all subsystems."""
         await super().on_start()
@@ -223,6 +227,39 @@ class AgentRuntime(BaseComponent):
             )
             self.react_loop._checkpoint_manager = self.checkpoint_manager
 
+        # MCP — start servers if configured
+        mcp_config = self.config.mcp
+        if mcp_config.servers:
+            self._mcp_manager = MCPServerManager(self.tool_registry)
+            import asyncio as _asyncio
+            import logging as _logging
+            _logger = _logging.getLogger("open_agent")
+
+            async def _start_mcp_server(srv_cfg):
+                server_config = ServerConfig(
+                    server_id=srv_cfg.server_id,
+                    transport=TransportType(srv_cfg.transport),
+                    command=srv_cfg.command,
+                    url=srv_cfg.url,
+                    headers=srv_cfg.headers,
+                    health_check_interval=srv_cfg.health_check_interval,
+                )
+                await self._mcp_manager.register_server(server_config)
+                try:
+                    await _asyncio.wait_for(
+                        self._mcp_manager.start_server(srv_cfg.server_id),
+                        timeout=mcp_config.connect_timeout,
+                    )
+                except _asyncio.TimeoutError:
+                    _logger.warning("MCP server %s connect timeout", srv_cfg.server_id)
+                except Exception as exc:
+                    _logger.warning("MCP server %s start failed: %s", srv_cfg.server_id, exc)
+
+            await _asyncio.gather(
+                *[_start_mcp_server(srv) for srv in mcp_config.servers],
+                return_exceptions=True,
+            )
+
     def _inject_sandbox_to_exec_tool(self) -> None:
         """Replace ExecTool with a sandbox-injected version, with fallback."""
         import logging
@@ -260,6 +297,9 @@ class AgentRuntime(BaseComponent):
 
     async def on_stop(self) -> None:
         """Clean up all subsystems."""
+        if self._mcp_manager:
+            for server_info in self._mcp_manager.list_servers():
+                await self._mcp_manager.stop_server(server_info["server_id"])
         if self._profile_memory:
             self._profile_memory.close()
         if self.sandbox:
