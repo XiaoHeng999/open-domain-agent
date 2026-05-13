@@ -34,7 +34,7 @@ from open_agent.hooks import HookEvent, HookManager
 from open_agent.hooks.builtin import welcome_hook, pre_check_hook, audit_hook
 from open_agent.mcp_integration import MCPServerManager, ServerConfig, TransportType
 from open_agent.subagent.manager import SubagentManager
-from open_agent.subagent.tool import SubagentTool
+from open_agent.tools.subagent import SubagentTool
 
 logger = logging.getLogger("open_agent")
 
