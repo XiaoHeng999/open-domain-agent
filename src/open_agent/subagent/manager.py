@@ -63,11 +63,11 @@ class SubagentManager:
     # -- Preset lookup (3.2) -----------------------------------------------
 
     def get_preset(self, subagent_type: str) -> SubagentPreset:
-        """Look up a preset by name, falling back to 'general'."""
+        """Look up a preset by name, falling back to 'explore'."""
         preset = self._presets.get(subagent_type)
         if preset is None:
-            logger.warning("Unknown subagent_type '%s', falling back to 'general'", subagent_type)
-            preset = self._presets["general"]
+            logger.warning("Unknown subagent_type '%s', falling back to 'explore'", subagent_type)
+            preset = self._presets["explore"]
         return preset
 
     # -- Restricted ToolRegistry (3.3) -------------------------------------
@@ -137,7 +137,7 @@ class SubagentManager:
     async def run_subagent(
         self,
         prompt: str,
-        subagent_type: str = "general",
+        subagent_type: str = "explore",
         max_turns: int | None = None,
         trace: Any = None,
         agent_id: str | None = None,
@@ -222,7 +222,7 @@ class SubagentManager:
     async def start_background(
         self,
         prompt: str,
-        subagent_type: str = "general",
+        subagent_type: str = "explore",
         max_turns: int | None = None,
         trace: Any = None,
     ) -> str:

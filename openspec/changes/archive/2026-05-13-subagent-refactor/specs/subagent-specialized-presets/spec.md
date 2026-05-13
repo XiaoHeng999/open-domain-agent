@@ -1,4 +1,4 @@
-## ADDED Requirements
+## MODIFIED Requirements
 
 ### Requirement: 内置预设类型 - Code Reviewer
 系统 SHALL 提供内置的 "code-reviewer" 预设类型，专注于代码审查任务。
@@ -52,16 +52,3 @@
 #### Scenario: Code Writer 最大轮次
 - **WHEN** 使用 subagent_type="code-writer" 创建子代理
 - **THEN** max_turns SHALL 为 20
-
-## MODIFIED Requirements
-
-### Requirement: 预设类型配置扩展
-用户 SHALL 能通过 config.yaml 的 subagent.presets 字段覆盖内置预设或添加新预设。
-
-#### Scenario: 配置覆盖内置预设
-- **WHEN** config.yaml 中 subagent.presets 包含 name="code-reviewer" 的自定义预设
-- **THEN** SHALL 使用用户配置的 system_prompt 和 allowed_tools 覆盖内置 code-reviewer 预设
-
-#### Scenario: 配置添加新预设
-- **WHEN** config.yaml 中 subagent.presets 包含 name="security-scanner" 的新预设
-- **THEN** 该预设 SHALL 可通过 subagent_type="security-scanner" 使用

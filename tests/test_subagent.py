@@ -10,7 +10,7 @@ from open_agent.config import SubagentConfig, SubagentPresetConfig
 from open_agent.registry import ToolRegistry
 from open_agent.subagent.manager import SubagentManager
 from open_agent.subagent.presets import BUILTIN_PRESETS, merge_presets
-from open_agent.subagent.tool import SubagentTool, _TASK_PARAMETERS
+from open_agent.tools.subagent import SubagentTool, _TASK_PARAMETERS
 from open_agent.subagent.types import SubagentPreset, SubagentResult
 from open_agent.tools.base import Tool
 from open_agent.trace import SpanKind
@@ -45,8 +45,8 @@ class FakeTool(Tool):
 
 def _make_registry() -> ToolRegistry:
     registry = ToolRegistry()
-    for name in ["read_file", "list_dir", "web_search", "web_fetch", "write_file", "edit_file", "exec"]:
-        registry.register(FakeTool(name, read_only=name in ("read_file", "list_dir", "web_search", "web_fetch")))
+    for name in ["read_file", "list_dir", "search", "web_search", "web_fetch", "write_file", "edit_file", "exec"]:
+        registry.register(FakeTool(name, read_only=name in ("read_file", "list_dir", "search", "web_search", "web_fetch")))
     return registry
 
 
@@ -96,23 +96,26 @@ class TestPresetLookup:
     def test_builtin_presets_exist(self):
         assert "explore" in BUILTIN_PRESETS
         assert "plan" in BUILTIN_PRESETS
-        assert "general" in BUILTIN_PRESETS
+        assert "code-reviewer" in BUILTIN_PRESETS
+        assert "code-writer" in BUILTIN_PRESETS
+        assert "researcher" in BUILTIN_PRESETS
 
     def test_get_preset_known(self):
         mgr = _make_manager()
         preset = mgr.get_preset("explore")
         assert preset.name == "explore"
-        assert "read-only" in preset.system_prompt.lower() or "read only" in preset.system_prompt.lower()
+        assert "exploration" in preset.system_prompt.lower() or "explore" in preset.system_prompt.lower()
 
-    def test_get_preset_unknown_falls_back_to_general(self):
+    def test_get_preset_unknown_falls_back_to_explore(self):
         mgr = _make_manager()
         preset = mgr.get_preset("nonexistent")
-        assert preset.name == "general"
+        assert preset.name == "explore"
 
-    def test_get_preset_general(self):
+    def test_get_preset_researcher(self):
         mgr = _make_manager()
-        preset = mgr.get_preset("general")
-        assert preset.name == "general"
+        preset = mgr.get_preset("researcher")
+        assert preset.name == "researcher"
+        assert "research" in preset.system_prompt.lower()
 
 
 # -- 7.3 Restricted ToolRegistry --
@@ -139,19 +142,20 @@ class TestRestrictedRegistry:
         registry = _make_registry()
         registry.register(SubagentTool(manager=MagicMock()))
         mgr = _make_manager(registry=registry)
-        restricted = mgr._build_restricted_registry(BUILTIN_PRESETS["general"])
+        restricted = mgr._build_restricted_registry(BUILTIN_PRESETS["explore"])
         names = {t.name for t in restricted.list_tools()}
         assert "task" not in names
 
-    def test_general_has_all_except_task(self):
+    def test_explore_excludes_task(self):
         registry = _make_registry()
         registry.register(SubagentTool(manager=MagicMock()))
         mgr = _make_manager(registry=registry)
-        restricted = mgr._build_restricted_registry(BUILTIN_PRESETS["general"])
+        restricted = mgr._build_restricted_registry(BUILTIN_PRESETS["explore"])
         names = {t.name for t in restricted.list_tools()}
         assert "read_file" in names
-        assert "write_file" in names
-        assert "exec" in names
+        assert "search" in names
+        assert "write_file" not in names
+        assert "exec" not in names
         assert "task" not in names
 
 
@@ -203,7 +207,7 @@ class TestCascadingStop:
         mgr._active["test-1"] = _ActiveSubagent(
             agent_id="test-1",
             task=task,
-            preset=BUILTIN_PRESETS["general"],
+            preset=BUILTIN_PRESETS["explore"],
         )
 
         await mgr.stop_all(timeout=1.0)
@@ -315,7 +319,7 @@ class TestRuntimeIntegration:
         tool = SubagentTool(manager=mgr)
         registry.register(tool)
 
-        restricted = mgr._build_restricted_registry(BUILTIN_PRESETS["general"])
+        restricted = mgr._build_restricted_registry(BUILTIN_PRESETS["explore"])
         assert not restricted.has("task")
 
 
@@ -336,10 +340,12 @@ class TestPresetMerge:
 
     def test_empty_presets_keeps_builtins(self):
         merged = merge_presets([])
-        assert len(merged) == 3
+        assert len(merged) == 5
         assert "explore" in merged
         assert "plan" in merged
-        assert "general" in merged
+        assert "code-reviewer" in merged
+        assert "code-writer" in merged
+        assert "researcher" in merged
 
 
 # -- Config --

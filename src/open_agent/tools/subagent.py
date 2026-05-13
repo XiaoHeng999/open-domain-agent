@@ -17,8 +17,8 @@ _TASK_PARAMETERS = {
         },
         "subagent_type": {
             "type": "string",
-            "description": "Preset sub-agent type (explore, plan, general, or custom)",
-            "default": "general",
+            "description": "Preset sub-agent type: explore (read-only search), plan (task planning), code-reviewer (read-only review), code-writer (code changes + exec), researcher (web research), or custom",
+            "default": "explore",
         },
         "description": {
             "type": "string",
@@ -54,7 +54,15 @@ class SubagentTool(Tool):
 
     @property
     def description(self) -> str:
-        return "Spawn a sub-agent to handle a delegated task. Returns the sub-agent's answer."
+        return (
+            "Spawn a sub-agent to handle a delegated task. "
+            "Built-in presets: explore (read-only codebase search and analysis), "
+            "plan (task analysis and structured planning), "
+            "code-reviewer (read-only code review with structured feedback), "
+            "code-writer (code modification with post-change verification), "
+            "researcher (web search and information synthesis, read-only). "
+            "Returns the sub-agent's answer."
+        )
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -66,7 +74,7 @@ class SubagentTool(Tool):
 
     async def execute(self, **kwargs: Any) -> str:
         prompt: str = kwargs["prompt"]
-        subagent_type: str = kwargs.get("subagent_type", "general")
+        subagent_type: str = kwargs.get("subagent_type", "explore")
         description: str = kwargs.get("description", "")
         run_in_background: bool = kwargs.get("run_in_background", False)
         max_turns: int = kwargs.get("max_turns", 10)
