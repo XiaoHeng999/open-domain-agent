@@ -202,6 +202,13 @@ class MemorySegment(PromptSegment):
                 _p.MEMORY_RETRIEVAL_TEMPLATE.format(retrieval_results=retrieval_results)
             )
 
+        # Missing slots hint (for non-simple tasks)
+        missing_slots_hint = context.get("missing_slots_hint")
+        if missing_slots_hint:
+            parts.append(
+                _p.MEMORY_MISSING_SLOTS_TEMPLATE.format(missing_slots_hint=missing_slots_hint)
+            )
+
         # Backward compat
         episodic = context.get("episodic_summary")
         if episodic and not retrieval_results:

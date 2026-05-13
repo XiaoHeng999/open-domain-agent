@@ -28,6 +28,11 @@ You are a request classifier for a multi-domain AI agent. Given a user message, 
 - medium: single-step tasks requiring generation or transformation (e.g. write a function)
 - complex: multi-step tasks, research, analysis, comparisons, reports
 
+## Missing slots inferability rules
+- Only mark a slot as missing when the parameter is completely uninferrable AND the task cannot proceed without it.
+- If a parameter can be reasonably determined by the downstream agent via tools or common sense (e.g. file name, programming language, output format), treat it as inferrable and do NOT include it in missing_slots.
+- When conversation history provides enough context to fill a slot, do NOT mark it as missing.
+
 ## Available domains
 {domains_description}
 
@@ -56,6 +61,10 @@ Output: {{"complexity": "complex", "confidence": 0.88, "domain": "search", "doma
 Example 3 (Chinese, missing info):
 User: "帮我搜索数据"
 Output: {{"complexity": "medium", "confidence": 0.85, "domain": "search", "domain_candidates": ["search", "general"], "intent": "search_data", "slots": {{}}, "missing_slots": ["data_source", "time_range"], "reason": "Search request but target data not specified"}}
+
+Example 4 (Chinese, inferrable params — no file name given):
+User: "帮我创建一个等差数列求和公式的代码"
+Output: {{"complexity": "medium", "confidence": 0.90, "domain": "coding", "domain_candidates": ["coding", "general"], "intent": "create_code", "slots": {{"task": "等差数列求和公式"}}, "missing_slots": [], "reason": "File name and language are inferrable by agent via tools"}}
 """
 
 

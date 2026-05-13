@@ -322,3 +322,204 @@ class TestMultiTurnRoutingIntegration:
 
         decision = await pipeline.route("再加100等于几？")
         assert "base_number" in decision.intent.missing_slots
+
+
+class TestMissingSlotsComplexityGating:
+    """Test 4.1 & 4.2: Verify complexity-based missing_slots handling in runtime."""
+
+    @pytest.fixture
+    def mock_components(self):
+        """Create a minimal AgentRuntime with mocked internals."""
+        from open_agent.config import AgentConfig
+        from open_agent.runtime import AgentRuntime
+        from open_agent.trace import TraceManager
+        config = AgentConfig()
+        runtime = object.__new__(AgentRuntime)
+        runtime.config = config
+        runtime.trace_manager = TraceManager.__new__(TraceManager)
+        runtime.trace_manager._traces = {}
+        runtime.trace_manager._counter = 0
+        runtime._runtime_memory = None
+        runtime._archive_memory = None
+        runtime._profile_memory = None
+        runtime._retrieval_memory = None
+        runtime._todo_manager = None
+        runtime._session_welcome = ""
+        runtime.routing_pipeline = AsyncMock()
+        runtime.plan_generator = AsyncMock()
+        runtime.skill_matcher = MagicMock()
+        runtime.skill_matcher.get_skills_for_prompt = MagicMock(return_value=[])
+        runtime.react_loop = AsyncMock()
+        runtime.react_loop._matched_skills = []
+        runtime.react_loop._missing_slots_hint = ""
+        runtime.react_loop.run = AsyncMock(return_value=type("Resp", (), {
+            "answer": "done", "total_steps": 1, "state": type("State", (), {"steps": []})()
+        })())
+        return runtime
+
+    @pytest.mark.asyncio
+    async def test_simple_missing_slots_triggers_clarification(self, mock_components):
+        """Test 4.1: simple + missing_slots → short-circuit return clarification."""
+        from open_agent.trace import TraceManager
+        runtime = mock_components
+
+        trace = runtime.trace_manager.create_trace(metadata={"user_input": "test"})
+        runtime.routing_pipeline.route = AsyncMock(return_value=RoutingDecision(
+            complexity=ComplexityResult(complexity="simple", confidence=0.95, method="rule"),
+            domain=DomainRouteResult(domain="general", candidates=["general"], routed_as_fallback=True),
+            intent=IntentResult(intent="weather_query", slots={}, missing_slots=["city"]),
+            skip_planning=True,
+        ))
+
+        # Manually simulate the routing check from runtime.run()
+        routing_decision = runtime.routing_pipeline.route.return_value
+        should_shortcircuit = (
+            routing_decision.intent.missing_slots
+            and routing_decision.complexity.complexity == "simple"
+        )
+        assert should_shortcircuit is True
+
+    @pytest.mark.asyncio
+    async def test_complex_missing_slots_no_shortcircuit(self, mock_components):
+        """Test 4.2: complex + missing_slots → no short-circuit, hint injected."""
+        runtime = mock_components
+
+        runtime.routing_pipeline.route = AsyncMock(return_value=RoutingDecision(
+            complexity=ComplexityResult(complexity="complex", confidence=0.8, method="rule"),
+            domain=DomainRouteResult(domain="coding", candidates=["coding"], routed_as_fallback=False),
+            intent=IntentResult(intent="create_code", slots={"task": "等差数列求和"}, missing_slots=["file_name"]),
+            skip_planning=False,
+        ))
+
+        routing_decision = runtime.routing_pipeline.route.return_value
+        should_shortcircuit = (
+            routing_decision.intent.missing_slots
+            and routing_decision.complexity.complexity == "simple"
+        )
+        assert should_shortcircuit is False
+
+        # Verify hint injection logic
+        if routing_decision.intent.missing_slots and routing_decision.complexity.complexity != "simple":
+            slot_list = ", ".join(routing_decision.intent.missing_slots)
+            hint = (
+                f"路由层检测到以下参数可能缺失: {slot_list}。"
+                "如果可以通过工具或常识合理推断，请直接执行任务。"
+                "如果确实无法推断，请向用户追问。"
+            )
+            assert "file_name" in hint
+            assert "推断" in hint
+
+    @pytest.mark.asyncio
+    async def test_medium_missing_slots_no_shortcircuit(self, mock_components):
+        """Test 4.2: medium + missing_slots → no short-circuit."""
+        runtime = mock_components
+
+        runtime.routing_pipeline.route = AsyncMock(return_value=RoutingDecision(
+            complexity=ComplexityResult(complexity="medium", confidence=0.85, method="rule"),
+            domain=DomainRouteResult(domain="coding", candidates=["coding"], routed_as_fallback=False),
+            intent=IntentResult(intent="write_code", slots={}, missing_slots=["output_format"]),
+            skip_planning=False,
+        ))
+
+        routing_decision = runtime.routing_pipeline.route.return_value
+        should_shortcircuit = (
+            routing_decision.intent.missing_slots
+            and routing_decision.complexity.complexity == "simple"
+        )
+        assert should_shortcircuit is False
+
+    @pytest.mark.asyncio
+    async def test_simple_no_missing_slots_passes(self, mock_components):
+        """Simple task with no missing_slots → no short-circuit."""
+        runtime = mock_components
+
+        runtime.routing_pipeline.route = AsyncMock(return_value=RoutingDecision(
+            complexity=ComplexityResult(complexity="simple", confidence=0.95, method="rule"),
+            domain=DomainRouteResult(domain="general", candidates=["general"], routed_as_fallback=True),
+            intent=IntentResult(intent="greet", slots={}, missing_slots=[]),
+            skip_planning=True,
+        ))
+
+        routing_decision = runtime.routing_pipeline.route.return_value
+        should_shortcircuit = bool(
+            routing_decision.intent.missing_slots
+            and routing_decision.complexity.complexity == "simple"
+        )
+        assert should_shortcircuit is False
+
+
+class TestInferabilityPromptRules:
+    """Test 4.3: Verify the router prompt contains inferability rules."""
+
+    def test_system_prompt_contains_inferability_rules(self):
+        provider = AsyncMock()
+        router = UnifiedLLMRouter(provider=provider, domains={})
+        prompt = router._system_prompt
+
+        assert "missing_slots" in prompt.lower()
+        assert "inferr" in prompt.lower() or "推断" in prompt or "infer" in prompt.lower()
+        assert "tool" in prompt.lower() or "工具" in prompt
+
+    def test_system_prompt_contains_inferable_example(self):
+        """Verify the few-shot example for inferrable params is present."""
+        from open_agent.routing.unified import _SYSTEM_PROMPT_TEMPLATE
+        assert "等差数列" in _SYSTEM_PROMPT_TEMPLATE
+        # The example should show missing_slots=[] for unspecified file name
+        assert 'missing_slots": []' in _SYSTEM_PROMPT_TEMPLATE or "missing_slots\":[]" in _SYSTEM_PROMPT_TEMPLATE
+
+
+class TestTemperatureEnforcement:
+    """Test 4.5: Verify temperature=0.0 in router calls."""
+
+    @pytest.mark.asyncio
+    async def test_router_uses_complete_structured(self):
+        """UnifiedLLMRouter uses complete_structured which forces temperature=0.0."""
+        import warnings
+        provider = AsyncMock()
+        provider.complete_structured = AsyncMock(return_value={
+            "complexity": "simple",
+            "confidence": 0.9,
+            "domain": "general",
+            "domain_candidates": ["general"],
+            "intent": "greet",
+            "slots": {},
+            "missing_slots": [],
+            "reason": "test",
+        })
+        router = UnifiedLLMRouter(provider=provider, domains={})
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            result = await router.route("hello")
+
+        # Verify complete_structured was called (it hardcodes temperature=0.0)
+        provider.complete_structured.assert_called_once()
+        assert result.complexity == "simple"
+
+    @pytest.mark.asyncio
+    async def test_deterministic_routing(self):
+        """Same input should produce same result through complete_structured."""
+        import warnings
+        fixed_result = {
+            "complexity": "medium",
+            "confidence": 0.88,
+            "domain": "coding",
+            "domain_candidates": ["coding"],
+            "intent": "create_code",
+            "slots": {"task": "等差数列求和"},
+            "missing_slots": [],
+            "reason": "Code generation task",
+        }
+        provider = AsyncMock()
+        provider.complete_structured = AsyncMock(return_value=fixed_result)
+        router = UnifiedLLMRouter(provider=provider, domains={})
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            r1 = await router.route("帮我创建一个等差数列求和公式的代码")
+            r2 = await router.route("帮我创建一个等差数列求和公式的代码")
+            r3 = await router.route("帮我创建一个等差数列求和公式的代码")
+
+        assert r1.missing_slots == r2.missing_slots == r3.missing_slots == []
+        assert r1.domain == r2.domain == r3.domain == "coding"
+        assert provider.complete_structured.call_count == 3

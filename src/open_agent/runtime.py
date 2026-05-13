@@ -357,8 +357,9 @@ class AgentRuntime(BaseComponent):
             user_input, trace=trace, history=routing_history,
         )
 
-        # 5.3 Missing slots clarification — return early without entering ReAct loop
-        if routing_decision.intent.missing_slots:
+        # 5.3 Missing slots clarification — short-circuit only for simple tasks
+        # For medium/complex tasks, missing_slots is injected as context hint (see below)
+        if routing_decision.intent.missing_slots and routing_decision.complexity.complexity == "simple":
             from open_agent.routing.intent import IntentParser
             parser = IntentParser()
             clarification = parser.generate_clarification(routing_decision.intent.missing_slots)
@@ -416,6 +417,17 @@ class AgentRuntime(BaseComponent):
                 prompt_context["plan"] = plan_text
 
         # Stage 4: ReAct execution
+        # Pass missing_slots hint to ReActLoop for non-simple tasks
+        if routing_decision.intent.missing_slots and routing_decision.complexity.complexity != "simple":
+            slot_list = ", ".join(routing_decision.intent.missing_slots)
+            self.react_loop._missing_slots_hint = (
+                f"路由层检测到以下参数可能缺失: {slot_list}。"
+                "如果可以通过工具或常识合理推断，请直接执行任务。"
+                "如果确实无法推断，请向用户追问。"
+            )
+        else:
+            self.react_loop._missing_slots_hint = ""
+
         try:
             response = await self.react_loop.run(
                 user_input=user_input,

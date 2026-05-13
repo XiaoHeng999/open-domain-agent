@@ -164,6 +164,9 @@ class ReActLoop:
         # Session welcome text injected by hooks
         self._session_welcome: str = ""
 
+        # Missing slots hint from routing (injected by runtime for non-simple tasks)
+        self._missing_slots_hint: str = ""
+
     # -- public API ----------------------------------------------------------
 
     async def run(
@@ -517,6 +520,16 @@ class ReActLoop:
                 start_time = _time.monotonic()
 
             if self._registry.has(action.tool_name):
+                # Print tool call info to console
+                from rich.console import Console
+                _console = Console()
+                _args_preview = json.dumps(action.args, ensure_ascii=False)
+                if len(_args_preview) > 120:
+                    _args_preview = _args_preview[:120] + "..."
+                _console.print(
+                    f"  [bold blue]🔧 Tool Call:[/] [cyan]{action.tool_name}[/]"
+                    f"  [dim]{_args_preview}[/]"
+                )
                 result = await self._registry.execute(action.tool_name, action.args)
                 content = str(result)
                 success = not content.startswith("Error:")
@@ -693,6 +706,10 @@ class ReActLoop:
             plan_text = self._todo_manager.render()
             if plan_text:
                 prompt_context["todo_plan"] = plan_text
+
+        # Inject missing slots hint
+        if self._missing_slots_hint:
+            prompt_context["missing_slots_hint"] = self._missing_slots_hint
 
         if self._prompt_builder is not None:
             system_content = self._prompt_builder.build(context=prompt_context)

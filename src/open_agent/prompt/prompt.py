@@ -54,6 +54,8 @@ MEMORY_RETRIEVAL_TEMPLATE = """### Retrieved memories
 {retrieval_results}"""
 MEMORY_TODO_TEMPLATE = """### Current plan
 {todo_plan}"""
+MEMORY_MISSING_SLOTS_TEMPLATE = """### Parameter hints
+{missing_slots_hint}"""
 
 # ── CLAUDE.md ──
 CLAUDEMD_HEADER = "Project directives:"
