@@ -44,6 +44,12 @@ class Tool(ABC):
         """Safety check types this tool requires (e.g. ["command"], ["url"], ["path"])."""
         return []
 
+    output_schema: dict[str, Any] | None = None
+
+    def validate_output(self, result: str) -> list[str]:
+        """Semantic-level output validation. Returns list of error messages (empty = pass)."""
+        return []
+
     @abstractmethod
     async def execute(self, **kwargs: Any) -> str:
         """Execute the tool with the given parameters. Returns result string."""

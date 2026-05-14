@@ -443,3 +443,122 @@ class TestHookEvent:
             HookEvent.TOOL_BEFORE,
             HookEvent.TOOL_AFTER,
         }
+
+
+# ===========================================================================
+# TOOL_AFTER blocking — HookManager + ReAct integration
+# ===========================================================================
+
+
+class TestToolAfterBlocked:
+    """Tests for TOOL_AFTER blocked=True interrupting the chain."""
+
+    def test_tool_after_blocked_interrupts_chain(self):
+        """TOOL_AFTER hook returning blocked=True stops subsequent hooks."""
+        called: list[str] = []
+
+        def blocker(ctx):
+            called.append("blocker")
+            return HookResult(blocked=True, content="quality check failed")
+
+        def should_not_run(ctx):
+            called.append("should_not_run")
+            return HookResult(content="should not appear")
+
+        mgr = HookManager()
+        mgr.register(HookEvent.TOOL_AFTER, blocker, priority=5)
+        mgr.register(HookEvent.TOOL_AFTER, should_not_run, priority=10)
+
+        results = asyncio.get_event_loop().run_until_complete(
+            mgr.fire(HookEvent.TOOL_AFTER, {}),
+        )
+        assert len(results) == 1
+        assert results[0].blocked is True
+        assert called == ["blocker"]
+
+    @pytest.mark.asyncio
+    async def test_tool_after_blocked_rejects_result(self):
+        """TOOL_AFTER blocked=True in ReAct loop sets success=False."""
+        registry = MagicMock()
+        registry.has.return_value = True
+        registry.get.return_value = MagicMock()
+        registry.execute = AsyncMock(return_value="result data")
+
+        mgr = HookManager()
+        mgr.register(
+            HookEvent.TOOL_AFTER,
+            lambda ctx: HookResult(blocked=True, content="Blocked: empty search result"),
+        )
+
+        loop = ReActLoop(tool_registry=registry, hook_manager=mgr)
+        action = Action(tool_name="web_search", args={"query": "test"}, step_index=0)
+
+        mock_trace = MagicMock()
+        mock_trace.final_status.value = "escalate"
+        mock_trace.attempts = []
+
+        with patch(
+            "open_agent.recovery.execute_recovery_chain",
+            new_callable=AsyncMock,
+            return_value=mock_trace,
+        ):
+            obs = await loop._execute_action(action, 0, None)
+
+        assert obs.success is False
+        assert "Blocked: empty search result" in obs.content
+
+    @pytest.mark.asyncio
+    async def test_tool_after_blocked_triggers_recovery(self):
+        """TOOL_AFTER blocked=True triggers recovery and uses recovered result on success."""
+        registry = MagicMock()
+        registry.has.return_value = True
+        registry.get.return_value = MagicMock()
+        registry.execute = AsyncMock(return_value="bad result")
+
+        mgr = HookManager()
+        mgr.register(
+            HookEvent.TOOL_AFTER,
+            lambda ctx: HookResult(blocked=True, content="quality check failed"),
+        )
+
+        loop = ReActLoop(tool_registry=registry, hook_manager=mgr)
+        action = Action(tool_name="search", args={"pattern": "test"}, step_index=0)
+
+        mock_result = MagicMock()
+        mock_result.status.value = "success"
+        mock_result.data = {"result": "recovered result"}
+        mock_result.message = "ok"
+
+        mock_trace = MagicMock()
+        mock_trace.final_status.value = "success"
+        mock_trace.attempts = [mock_result]
+
+        with patch(
+            "open_agent.recovery.execute_recovery_chain",
+            new_callable=AsyncMock,
+            return_value=mock_trace,
+        ):
+            obs = await loop._execute_action(action, 0, None)
+
+        assert obs.success is True
+        assert "recovered result" in obs.content
+
+    @pytest.mark.asyncio
+    async def test_tool_after_not_blocked_passes_through(self):
+        """TOOL_AFTER with blocked=False works normally."""
+        registry = MagicMock()
+        registry.has.return_value = True
+        registry.execute = AsyncMock(return_value="result data")
+
+        mgr = HookManager()
+        mgr.register(
+            HookEvent.TOOL_AFTER,
+            lambda ctx: HookResult(content="[AUDIT] ok"),
+        )
+
+        loop = ReActLoop(tool_registry=registry, hook_manager=mgr)
+        action = Action(tool_name="exec", args={"command": "ls"}, step_index=0)
+
+        obs = await loop._execute_action(action, 0, None)
+        assert obs.success is True
+        assert "result data" in obs.content

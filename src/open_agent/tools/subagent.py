@@ -44,9 +44,10 @@ _TASK_PARAMETERS = {
 class SubagentTool(Tool):
     """Tool that spawns a sub-agent to handle a delegated task."""
 
-    def __init__(self, manager: Any, trace: Any = None) -> None:
+    def __init__(self, manager: Any, trace: Any = None, agent_id: str | None = None) -> None:
         self._manager = manager
         self._trace = trace
+        self._agent_id = agent_id
 
     @property
     def name(self) -> str:
@@ -122,6 +123,7 @@ class SubagentTool(Tool):
             subagent_type=subagent_type,
             max_turns=max_turns,
             trace=self._trace,
+            parent_id=self._agent_id,
         )
 
         if span:

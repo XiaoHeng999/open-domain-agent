@@ -1,15 +1,17 @@
 """Execution middleware chain — composable tool execution pipeline.
 
 Middleware protocol and built-in implementations for safety, permission,
-execution, and truncation. Each middleware is independently testable.
+execution, output validation, and truncation. Each middleware is independently testable.
 
-Chain order: SafetyMiddleware → PermissionMiddleware → TruncateMiddleware → ExecuteMiddleware
+Chain order: SafetyMiddleware → PermissionMiddleware → ExecuteMiddleware → OutputValidationMiddleware → TruncateMiddleware
 - Safety and Permission are outer layers that short-circuit on violations
-- Truncate wraps Execute to truncate results
 - Execute is the terminal middleware that calls the tool
+- OutputValidation checks tool output against declared schema and semantic rules
+- Truncate wraps everything to truncate results
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Any, Callable, Awaitable
 
@@ -196,6 +198,46 @@ class ExecuteMiddleware(ExecutionMiddleware):
             return f"Error: {exc}"
 
 
+class OutputValidationMiddleware(ExecutionMiddleware):
+    """Validate tool output against declared output_schema and validate_output().
+
+    Runs after ExecuteMiddleware. If the tool declares an output_schema (JSON Schema),
+    the result is validated against it. Then validate_output() is called for semantic checks.
+    On failure, the result is replaced with an error message.
+    """
+
+    async def process(
+        self,
+        context: MiddlewareContext,
+        next: NextMiddleware,
+    ) -> str:
+        result = await next()
+
+        schema = context.tool.output_schema
+        if schema is not None:
+            # Try to parse result as JSON for schema validation
+            parsed = None
+            if isinstance(result, str):
+                try:
+                    parsed = json.loads(result)
+                except (json.JSONDecodeError, ValueError):
+                    parsed = None
+
+            if isinstance(parsed, dict):
+                from open_agent.tools.base import _validate_object
+                errors = _validate_object(parsed, schema, "")
+                if errors:
+                    return f"Error: Output validation failed: {errors[0]}"
+
+            # Run semantic validation regardless
+            semantic_errors = context.tool.validate_output(result)
+            if semantic_errors:
+                msg = "; ".join(semantic_errors)
+                return f"Error: Output semantic validation failed: {msg}"
+
+        return result
+
+
 def build_middleware_chain(
     middlewares: list[ExecutionMiddleware],
 ) -> Callable[[MiddlewareContext], Awaitable[str]]:
@@ -220,10 +262,11 @@ def default_chain(
     permission_guard: Any = None,
     max_tool_result_tokens: int = 2000,
 ) -> Callable[[MiddlewareContext], Awaitable[str]]:
-    """Build the default middleware chain: Safety → Permission → Truncate → Execute."""
+    """Build the default middleware chain: Safety → Permission → Execute → OutputValidation → Truncate."""
     return build_middleware_chain([
         SafetyMiddleware(),
         PermissionMiddleware(),
-        TruncateMiddleware(),
         ExecuteMiddleware(),
+        OutputValidationMiddleware(),
+        TruncateMiddleware(),
     ])

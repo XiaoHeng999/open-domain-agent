@@ -370,3 +370,45 @@ class TestSubagentConfig:
 class TestSubagentSpanKind:
     def test_subagent_span_kind_exists(self):
         assert SpanKind.SUBAGENT == "subagent"
+
+
+# -- max_children enforcement --
+
+class TestMaxChildren:
+    @pytest.mark.asyncio
+    async def test_rejects_when_limit_reached(self):
+        mgr = _make_manager(config=SubagentConfig(max_children=2))
+        mgr._children_by_parent["p1"] = {"child-1", "child-2"}
+
+        result = await mgr.run_subagent(
+            prompt="Should be rejected",
+            parent_id="p1",
+        )
+
+        assert result.success is False
+        assert "max_children=2" in result.answer
+
+    @pytest.mark.asyncio
+    async def test_releases_quota_on_completion(self):
+        mgr = _make_manager(config=SubagentConfig(max_children=2))
+
+        with patch("open_agent.subagent.manager.ReActLoop") as MockLoop:
+            mock_instance = AsyncMock()
+            mock_response = MagicMock()
+            mock_response.answer = "done"
+            mock_instance.run = AsyncMock(return_value=mock_response)
+            MockLoop.return_value = mock_instance
+
+            r1 = await mgr.run_subagent(prompt="first", parent_id="p1")
+            assert r1.success is True
+            assert "p1" not in mgr._children_by_parent or len(mgr._children_by_parent.get("p1", set())) == 0
+
+    @pytest.mark.asyncio
+    async def test_stop_all_clears_children(self):
+        mgr = _make_manager(config=SubagentConfig(max_children=5))
+        mgr._children_by_parent["p1"] = {"c1", "c2"}
+        mgr._children_by_parent["p2"] = {"c3"}
+
+        await mgr.stop_all()
+
+        assert mgr._children_by_parent == {}

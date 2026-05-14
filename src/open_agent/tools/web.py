@@ -151,6 +151,13 @@ WebSearchTool = BraveSearchTool
 class WebFetchTool(Tool):
     """Fetch and extract content from a URL, converting HTML to Markdown."""
 
+    output_schema: dict[str, Any] | None = None
+
+    def validate_output(self, result: str) -> list[str]:
+        if not result or not result.strip():
+            return ["Fetched URL returned empty content"]
+        return []
+
     def __init__(self, max_chars: int = 50000) -> None:
         self._max_chars = max_chars
 

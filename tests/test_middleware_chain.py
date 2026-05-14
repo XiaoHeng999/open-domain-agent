@@ -8,13 +8,14 @@ from open_agent.middleware import (
     ExecuteMiddleware,
     ExecutionMiddleware,
     MiddlewareContext,
+    OutputValidationMiddleware,
     PermissionMiddleware,
     SafetyMiddleware,
     TruncateMiddleware,
     build_middleware_chain,
     default_chain,
 )
-from open_agent.tools.base import FunctionTool
+from open_agent.tools.base import FunctionTool, Tool
 
 
 async def _ok():
@@ -225,3 +226,132 @@ class TestRecoveryThroughPipeline:
         result = await strategy.execute(ParameterError("bad param"), context)
         assert result.status.value == "success"
         registry.execute.assert_called_once_with("test_tool", {"key": "fixed"})
+
+
+# -- OutputValidationMiddleware --
+
+
+class _SchemaTool(Tool):
+    """Test tool with an output_schema."""
+
+    output_schema = {"type": "object", "required": ["items"], "properties": {"items": {"type": "array"}}}
+
+    @property
+    def name(self) -> str:
+        return "schema_tool"
+
+    @property
+    def description(self) -> str:
+        return "test"
+
+    @property
+    def parameters(self) -> dict:
+        return {"type": "object", "properties": {}}
+
+    async def execute(self, **kwargs):
+        return '{"items": [1, 2, 3]}'
+
+
+class _SchemaFailTool(Tool):
+    """Test tool whose output doesn't match schema."""
+
+    output_schema = {"type": "object", "required": ["items"], "properties": {"items": {"type": "array"}}}
+
+    @property
+    def name(self) -> str:
+        return "schema_fail_tool"
+
+    @property
+    def description(self) -> str:
+        return "test"
+
+    @property
+    def parameters(self) -> dict:
+        return {"type": "object", "properties": {}}
+
+    async def execute(self, **kwargs):
+        return '{"data": "something"}'
+
+
+class _SemanticFailTool(Tool):
+    """Test tool whose output fails semantic validation."""
+
+    output_schema = {"type": "object", "required": []}
+
+    @property
+    def name(self) -> str:
+        return "semantic_fail_tool"
+
+    @property
+    def description(self) -> str:
+        return "test"
+
+    @property
+    def parameters(self) -> dict:
+        return {"type": "object", "properties": {}}
+
+    def validate_output(self, result: str) -> list[str]:
+        return ["Search returned no results"]
+
+    async def execute(self, **kwargs):
+        return '{"items": []}'
+
+
+class TestOutputValidationMiddleware:
+    async def test_compliant_output_passes(self):
+        mw = OutputValidationMiddleware()
+        tool = _SchemaTool()
+        ctx = _make_context(tool=tool)
+
+        async def _result():
+            return '{"items": [1, 2, 3]}'
+
+        result = await mw.process(ctx, _result)
+        assert "Error" not in result
+        assert "items" in result
+
+    async def test_non_compliant_output_blocked(self):
+        mw = OutputValidationMiddleware()
+        tool = _SchemaFailTool()
+        ctx = _make_context(tool=tool)
+
+        async def _result():
+            return '{"data": "something"}'
+
+        result = await mw.process(ctx, _result)
+        assert "Error" in result
+        assert "Output validation failed" in result
+
+    async def test_no_schema_passes_through(self):
+        mw = OutputValidationMiddleware()
+        tool = _make_tool(handler=lambda: "plain text")
+        ctx = _make_context(tool=tool)
+
+        async def _result():
+            return "plain text"
+
+        result = await mw.process(ctx, _result)
+        assert result == "plain text"
+
+    async def test_semantic_validation_failure(self):
+        mw = OutputValidationMiddleware()
+        tool = _SemanticFailTool()
+        ctx = _make_context(tool=tool)
+
+        async def _result():
+            return '{"items": []}'
+
+        result = await mw.process(ctx, _result)
+        assert "Error" in result
+        assert "semantic validation failed" in result
+
+    async def test_string_result_skips_schema_validation(self):
+        mw = OutputValidationMiddleware()
+        tool = _SchemaTool()
+        ctx = _make_context(tool=tool)
+
+        async def _result():
+            return "not json"
+
+        result = await mw.process(ctx, _result)
+        assert "Error" not in result

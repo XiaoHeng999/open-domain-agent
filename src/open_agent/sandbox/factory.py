@@ -14,26 +14,33 @@ class SubprocessSandbox(BaseComponent):
     def __init__(self, config: dict[str, Any] | None = None) -> None:
         super().__init__()
         self.config = config or {}
+        self.auto_timeout: int = self.config.get("auto_timeout", 300)
 
     async def exec(self, command: str, timeout: int = 30) -> dict[str, Any]:
         import asyncio
         try:
-            proc = await asyncio.create_subprocess_shell(
-                command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-            return {
-                "success": proc.returncode == 0,
-                "exit_code": proc.returncode,
-                "output": stdout.decode(errors="replace"),
-                "error": stderr.decode(errors="replace") if stderr else None,
-            }
+            effective_timeout = min(timeout, self.auto_timeout)
+            coro = self._exec_inner(command, timeout)
+            return await asyncio.wait_for(coro, timeout=effective_timeout)
         except asyncio.TimeoutError:
-            return {"success": False, "error": f"Command timed out after {timeout}s"}
+            raise asyncio.TimeoutError(f"Sandbox execution timed out after {effective_timeout}s")
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    async def _exec_inner(self, command: str, timeout: int) -> dict[str, Any]:
+        import asyncio
+        proc = await asyncio.create_subprocess_shell(
+            command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        return {
+            "success": proc.returncode == 0,
+            "exit_code": proc.returncode,
+            "output": stdout.decode(errors="replace"),
+            "error": stderr.decode(errors="replace") if stderr else None,
+        }
 
     async def read_file(self, path: str) -> dict[str, Any]:
         try:

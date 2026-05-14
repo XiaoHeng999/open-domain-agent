@@ -14,6 +14,13 @@ _MAX_RESULTS = 100
 class SearchTool(Tool):
     """Code search tool providing grep (via ripgrep) and glob file matching."""
 
+    output_schema: dict[str, Any] | None = None
+
+    def validate_output(self, result: str) -> list[str]:
+        if result.startswith("No ") and ("found" in result.lower() or "matched" in result.lower()):
+            return ["Search returned no results"]
+        return []
+
     def __init__(self, workspace: str = ".") -> None:
         self._workspace = workspace
 

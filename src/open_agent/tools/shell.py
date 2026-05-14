@@ -10,6 +10,13 @@ from open_agent.tools.base import Tool
 class ExecTool(Tool):
     """Execute shell commands via async subprocess or sandbox."""
 
+    output_schema: dict[str, Any] | None = None
+
+    def validate_output(self, result: str) -> list[str]:
+        if not result or not result.strip():
+            return ["Command returned empty output"]
+        return []
+
     def __init__(
         self,
         workspace: str = ".",

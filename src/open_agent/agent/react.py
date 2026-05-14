@@ -214,9 +214,20 @@ class ReActLoop:
         tool_failure_counts: dict[str, int] = {}
         degraded_tools: set[str] = set()
 
+        # Anomaly detection tracking
+        tool_call_history: list[str] = []
+        error_message_history: list[str] = []
+        should_terminate = False
+
         try:
             for iteration in range(start_iteration, self._max_iterations):
                 logger.info("react.iteration.start iter=%d/%d", iteration + 1, self._max_iterations)
+
+                # -- Anomaly termination check --
+                if should_terminate:
+                    logger.warning("Terminating due to detected anomaly")
+                    break
+
                 step = ReActStep(index=iteration)
 
                 # Increment task state
@@ -313,6 +324,41 @@ class ReActLoop:
                         tool_failure_counts[act.tool_name] = tool_failure_counts.get(act.tool_name, 0) + 1
                         if tool_failure_counts[act.tool_name] >= 3:
                             degraded_tools.add(act.tool_name)
+
+                    # Track for anomaly detection
+                    tool_call_history.append(act.tool_name)
+                    if not obs.success:
+                        error_message_history.append(obs.content)
+
+                    # Check anomaly thresholds
+                    from collections import Counter
+                    tool_counts = Counter(tool_call_history)
+                    for t_name, count in tool_counts.items():
+                        if count >= 4:
+                            logger.warning("Tool loop detected: %s called %d times", t_name, count)
+                            obs = Observation(
+                                content=f"Agent terminated: tool loop detected ({t_name} called 4+ times). Consider simplifying the task or checking tool availability.",
+                                tool_name=t_name,
+                                success=False,
+                                step_index=iteration,
+                            )
+                            should_terminate = True
+                            break
+
+                    if not should_terminate:
+                        error_counts = Counter(error_message_history)
+                        for err_msg, count in error_counts.items():
+                            if count >= 3:
+                                short_err = err_msg.split(":")[0] if ":" in err_msg else err_msg[:50]
+                                logger.warning("Repeated error detected: %s occurred %d times", short_err, count)
+                                obs = Observation(
+                                    content=f"Agent terminated: repeated error detected ({short_err} occurred 3+ times). Consider simplifying the task or checking tool availability.",
+                                    tool_name=act.tool_name,
+                                    success=False,
+                                    step_index=iteration,
+                                )
+                                should_terminate = True
+                                break
 
                     # Append degraded warning if tool is degraded
                     if act.tool_name in degraded_tools:
@@ -593,6 +639,20 @@ class ReActLoop:
                 HookEvent.TOOL_AFTER, after_ctx,
             )
             for hr in after_results:
+                if hr.blocked:
+                    # TOOL_AFTER blocked — reject result and trigger recovery
+                    blocked_content = hr.content or "Blocked by TOOL_AFTER hook"
+                    success = False
+                    content = blocked_content
+                    # Attempt recovery
+                    from open_agent.errors import ToolError as _TE
+                    recovery_exc = _TE(blocked_content)
+                    recovery_trace = await self._try_recover(recovery_exc, action)
+                    if recovery_trace is not None and recovery_trace.final_status.value == "success":
+                        last_attempt = recovery_trace.attempts[-1]
+                        content = str(last_attempt.data.get("result", last_attempt.message))
+                        success = True
+                    break
                 if hr.content:
                     hook_suffix += "\n" + hr.content
 

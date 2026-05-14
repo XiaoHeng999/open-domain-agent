@@ -28,7 +28,8 @@ class HookResult:
     content:
         Optional text injected into the LLM message stream.
     blocked:
-        When True (only meaningful for TOOL_BEFORE), stops tool execution.
+        When True, stops tool execution (TOOL_BEFORE) or rejects tool result
+        (TOOL_AFTER). In TOOL_AFTER, the result is replaced and recovery is triggered.
     metadata:
         Arbitrary dict for non-injected data (audit metrics, etc.).
     """

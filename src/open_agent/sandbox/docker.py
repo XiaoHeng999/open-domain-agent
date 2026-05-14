@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 from open_agent.base import BaseComponent
 from open_agent.decorators import tool_schema
+
+logger = logging.getLogger("open_agent.sandbox")
 
 
 class DockerSandbox(BaseComponent):
@@ -18,6 +21,8 @@ class DockerSandbox(BaseComponent):
         self._client = None
         self._container = None
         self._image = self.config.get("image", "python:3.11-slim")
+        self._working_dir = self.config.get("working_dir", "/workspace")
+        self.auto_timeout: int = self.config.get("auto_timeout", 300)
 
     async def on_start(self) -> None:
         try:
@@ -49,8 +54,15 @@ class DockerSandbox(BaseComponent):
         if not self._container:
             return {"success": False, "error": "Sandbox not started"}
         try:
-            exit_code, output = self._container.exec_run(cmd=f"bash -c '{command}'")
-            return {"success": True, "exit_code": exit_code, "output": output.decode(errors="replace")}
+            effective_timeout = min(timeout, self.auto_timeout)
+
+            async def _docker_exec():
+                exit_code, output = self._container.exec_run(cmd=f"bash -c '{command}'")
+                return {"success": exit_code == 0, "exit_code": exit_code, "output": output.decode(errors="replace")}
+
+            return await asyncio.wait_for(_docker_exec(), timeout=effective_timeout)
+        except asyncio.TimeoutError:
+            raise asyncio.TimeoutError(f"Sandbox execution timed out after {effective_timeout}s")
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -92,4 +104,48 @@ class DockerSandbox(BaseComponent):
 
     @tool_schema(name="sandbox_restore")
     async def restore(self, snapshot_id: str) -> dict[str, Any]:
-        return {"success": False, "error": "Docker restore not fully supported - use Daytona for snapshots"}
+        if not self._client:
+            return {"success": False, "error": "Docker client not initialized"}
+        try:
+            # Check snapshot exists
+            try:
+                self._client.images.get(snapshot_id)
+            except Exception:
+                return {"success": False, "error": f"Snapshot {snapshot_id} not found"}
+
+            # Stop old container
+            old_container = self._container
+            self._container = None
+
+            if old_container:
+                try:
+                    old_container.stop(timeout=5)
+                    old_container.remove()
+                except Exception:
+                    pass
+
+            # Create new container from snapshot image
+            try:
+                self._container = self._client.containers.run(
+                    snapshot_id,
+                    command="tail -f /dev/null",
+                    detach=True,
+                    tty=True,
+                    working_dir=self._working_dir,
+                    mem_limit=self.config.get("mem_limit", "512m"),
+                    network_mode=self.config.get("network_mode", "none"),
+                )
+            except Exception as e:
+                return {"success": False, "error": f"Failed to create container from snapshot: {e}"}
+
+            # Verify new container is working
+            try:
+                exit_code, output = self._container.exec_run(cmd="echo ok")
+                if exit_code != 0:
+                    return {"success": False, "error": f"Container verification failed: {output.decode(errors='replace')}"}
+            except Exception as e:
+                return {"success": False, "error": f"Container verification failed: {e}"}
+
+            return {"success": True}
+        except Exception as e:
+            return {"success": False, "error": f"Docker restore failed: {e}"}

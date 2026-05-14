@@ -148,3 +148,128 @@ class TestReActToolUse:
             routing_decision=MagicMock(skip_planning=True),
         )
         assert result.answer  # Should have some answer
+
+
+class _FailingTool(Tool):
+    """Tool that always fails with a consistent error."""
+
+    def __init__(self, error_msg: str = "Connection refused"):
+        self._error = error_msg
+
+    @property
+    def name(self) -> str:
+        return "fail_tool"
+
+    @property
+    def description(self) -> str:
+        return "Always fails"
+
+    @property
+    def parameters(self) -> dict:
+        return {"type": "object", "properties": {}}
+
+    async def execute(self, **kwargs):
+        return f"Error: {self._error}"
+
+
+class TestAnomalyTermination:
+    @pytest.mark.asyncio
+    async def test_tool_loop_terminates(self):
+        """Same tool called >=4 times triggers termination."""
+        registry = ToolRegistry()
+        registry.register(_EchoTool())
+
+        provider = MagicMock()
+
+        tool_response = ToolCallResponse(
+            text="calling echo",
+            tool_calls=[ToolCall(id="call_1", name="echo", input={"text": "hi"})],
+            stop_reason="tool_use",
+        )
+        answer_response = ToolCallResponse(
+            text="Final answer",
+            tool_calls=[],
+            stop_reason="end_turn",
+        )
+        provider.complete_with_tools = AsyncMock(
+            side_effect=[tool_response, tool_response, tool_response, tool_response, answer_response]
+        )
+
+        loop = ReActLoop(
+            tool_registry=registry,
+            provider=provider,
+        )
+        result = await loop.run(
+            user_input="Keep echoing",
+            routing_decision=MagicMock(skip_planning=True),
+        )
+
+        assert result.total_steps <= 5
+        assert "tool loop detected" in result.answer or result.total_steps < 5
+
+    @pytest.mark.asyncio
+    async def test_repeated_error_terminates(self):
+        """Same error message appearing >=3 times triggers termination."""
+        registry = ToolRegistry()
+        registry.register(_FailingTool("Connection refused"))
+
+        provider = MagicMock()
+
+        fail_response = ToolCallResponse(
+            text="trying",
+            tool_calls=[ToolCall(id="call_1", name="fail_tool", input={})],
+            stop_reason="tool_use",
+        )
+        answer_response = ToolCallResponse(
+            text="Final answer",
+            tool_calls=[],
+            stop_reason="end_turn",
+        )
+        provider.complete_with_tools = AsyncMock(
+            side_effect=[fail_response, fail_response, fail_response, answer_response]
+        )
+
+        loop = ReActLoop(
+            tool_registry=registry,
+            provider=provider,
+        )
+        result = await loop.run(
+            user_input="Try the failing tool",
+            routing_decision=MagicMock(skip_planning=True),
+        )
+
+        assert "repeated error detected" in result.answer or result.total_steps < 4
+
+    @pytest.mark.asyncio
+    async def test_below_threshold_does_not_terminate(self):
+        """Below threshold (2 tool calls, 2 errors) does not trigger termination."""
+        registry = ToolRegistry()
+        registry.register(_EchoTool())
+
+        provider = MagicMock()
+
+        tool_response = ToolCallResponse(
+            text="calling echo",
+            tool_calls=[ToolCall(id="call_1", name="echo", input={"text": "hi"})],
+            stop_reason="tool_use",
+        )
+        answer_response = ToolCallResponse(
+            text="Final answer",
+            tool_calls=[],
+            stop_reason="end_turn",
+        )
+        provider.complete_with_tools = AsyncMock(
+            side_effect=[tool_response, tool_response, answer_response]
+        )
+
+        loop = ReActLoop(
+            tool_registry=registry,
+            provider=provider,
+        )
+        result = await loop.run(
+            user_input="Echo twice",
+            routing_decision=MagicMock(skip_planning=True),
+        )
+
+        assert result.total_steps == 3
+        assert "terminated" not in result.answer.lower()

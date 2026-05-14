@@ -23,6 +23,13 @@ def _resolve_path(path: str, workspace: str) -> Path:
 class ReadFileTool(Tool):
     """Read file contents, optionally with offset/limit for pagination."""
 
+    output_schema: dict[str, Any] | None = None
+
+    def validate_output(self, result: str) -> list[str]:
+        if not result or not result.strip():
+            return ["File is empty or could not be read"]
+        return []
+
     def __init__(self, workspace: str = ".") -> None:
         self._workspace = workspace
 

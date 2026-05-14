@@ -57,6 +57,9 @@ class SubagentManager:
         # Completed results: agent_id -> SubagentResult
         self._results: dict[str, SubagentResult] = {}
 
+        # Per-parent child tracking: parent_id -> set of active child agent_ids
+        self._children_by_parent: dict[str, set[str]] = {}
+
         # Concurrency semaphore
         self._semaphore = asyncio.Semaphore(config.max_concurrent)
 
@@ -141,15 +144,31 @@ class SubagentManager:
         max_turns: int | None = None,
         trace: Any = None,
         agent_id: str | None = None,
+        parent_id: str | None = None,
     ) -> SubagentResult:
         """Create and run a sub-agent synchronously (awaitable)."""
         preset = self.get_preset(subagent_type)
         effective_max_turns = max_turns or preset.max_turns or self._config.default_max_turns
 
+        # Enforce max_children per parent
+        if parent_id is not None:
+            children = self._children_by_parent.setdefault(parent_id, set())
+            if len(children) >= self._config.max_children:
+                return SubagentResult(
+                    agent_id=agent_id or self._generate_agent_id(),
+                    answer=f"Per-parent subagent limit (max_children={self._config.max_children}) reached for parent {parent_id}",
+                    success=False,
+                    duration_ms=0,
+                )
+
         await self._acquire_slot()
         if agent_id is None:
             agent_id = self._generate_agent_id()
         start_time = time.time()
+
+        # Register child under parent
+        if parent_id is not None:
+            self._children_by_parent.setdefault(parent_id, set()).add(agent_id)
 
         restricted_registry = self._build_restricted_registry(preset)
         loop = self._create_react_loop(preset, effective_max_turns, restricted_registry)
@@ -217,6 +236,12 @@ class SubagentManager:
             self._results[agent_id] = result
             self._release_slot()
 
+            # Remove child from parent tracking
+            if parent_id is not None and parent_id in self._children_by_parent:
+                self._children_by_parent[parent_id].discard(agent_id)
+                if not self._children_by_parent[parent_id]:
+                    del self._children_by_parent[parent_id]
+
         return result
 
     async def start_background(
@@ -248,6 +273,9 @@ class SubagentManager:
 
     async def stop_all(self, timeout: float = 5.0) -> None:
         """Cancel all active sub-agents with timeout."""
+        # Always clear child tracking regardless of active state
+        self._children_by_parent.clear()
+
         if not self._active:
             return
 

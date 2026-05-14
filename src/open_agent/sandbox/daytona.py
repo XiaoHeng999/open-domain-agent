@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from open_agent.base import BaseComponent
@@ -16,6 +17,7 @@ class DaytonaSandbox(BaseComponent):
         self.config = config or {}
         self._client = None
         self._workspace = None
+        self.auto_timeout: int = self.config.get("auto_timeout", 300)
 
     async def on_start(self) -> None:
         try:
@@ -41,8 +43,21 @@ class DaytonaSandbox(BaseComponent):
         """
         if not self._workspace:
             return {"success": False, "error": "Sandbox not started"}
-        result = self._workspace.process.execute(command, timeout=timeout)
-        return {"success": True, "exit_code": result.exit_code, "output": result.output}
+        try:
+            effective_timeout = min(timeout, self.auto_timeout)
+
+            def _daytona_exec():
+                return self._workspace.process.execute(command, timeout=effective_timeout)
+
+            result = await asyncio.wait_for(
+                asyncio.get_event_loop().run_in_executor(None, _daytona_exec),
+                timeout=effective_timeout,
+            )
+            return {"success": True, "exit_code": result.exit_code, "output": result.output}
+        except asyncio.TimeoutError:
+            raise asyncio.TimeoutError(f"Sandbox execution timed out after {effective_timeout}s")
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     @tool_schema(name="sandbox_read_file")
     async def read_file(self, path: str) -> dict[str, Any]:

@@ -67,7 +67,7 @@ class HookManager:
     ) -> list[HookResult]:
         """Fire all hooks registered for *event* and collect results.
 
-        For ``TOOL_BEFORE``, the chain is interrupted immediately when
+        For ``TOOL_BEFORE`` and ``TOOL_AFTER``, the chain is interrupted immediately when
         any hook returns ``blocked=True`` — subsequent hooks are skipped.
         """
         if not self.enabled:
@@ -84,7 +84,7 @@ class HookManager:
                 result = await result  # type: ignore[misc]
                 results.append(result)
 
-            if event == HookEvent.TOOL_BEFORE and result.blocked:
+            if result.blocked and event in (HookEvent.TOOL_BEFORE, HookEvent.TOOL_AFTER):
                 logger.info("Hook chain interrupted: %s blocked execution", event)
                 break
 
