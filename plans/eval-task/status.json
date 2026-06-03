@@ -3,11 +3,11 @@
   "02-create-evals-smoke-scenarios": "done",
   "03-wire-cli-eval-to-runtime": "done",
   "04-eval-result-persistence": "done",
-  "05-e2e-live-test-scaffold-deepseek-qa": "pending",
-  "06-e2e-react-tool-calling": "pending",
-  "07-e2e-streaming-tool-calls": "pending",
-  "08-e2e-task-cancellation": "pending",
-  "09-e2e-run-smoke-eval-suite": "pending",
+  "05-e2e-live-test-scaffold-deepseek-qa": "done",
+  "06-e2e-react-tool-calling": "done",
+  "07-e2e-streaming-tool-calls": "done",
+  "08-e2e-task-cancellation": "done",
+  "09-e2e-run-smoke-eval-suite": "done",
   "10-boundary-tests-streaming": "done",
   "11-boundary-tests-cancellation-react-deepseek": "done"
 }
