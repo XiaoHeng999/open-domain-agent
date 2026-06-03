@@ -198,6 +198,13 @@ class SubagentConfig(BaseModel):
     presets: list[SubagentPresetConfig] = Field(default_factory=list)
 
 
+class CostTrackingConfig(BaseModel):
+    """Cost tracking configuration."""
+
+    enabled: bool = False
+    budget_daily: Optional[float] = None
+
+
 class AgentConfig(BaseModel):
     """Top-level agent configuration."""
 
@@ -213,6 +220,7 @@ class AgentConfig(BaseModel):
     permissions: PermissionConfig = Field(default_factory=PermissionConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)
     subagent: SubagentConfig = Field(default_factory=SubagentConfig)
+    cost_tracking: CostTrackingConfig = Field(default_factory=CostTrackingConfig)
 
     workspace: str = "."
 

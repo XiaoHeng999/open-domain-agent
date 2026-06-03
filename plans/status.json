@@ -14,7 +14,7 @@
   "13-conversation-persistence-sqlite": "done",
   "14-async-cli-input": "done",
   "15-streaming-output": "pending",
-  "16-cost-tracking": "pending",
+  "16-cost-tracking": "done",
   "17-prompt-caching": "pending",
   "18-task-cancellation": "pending",
   "19-eval-runner": "pending"

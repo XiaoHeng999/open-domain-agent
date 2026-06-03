@@ -116,6 +116,7 @@ class AgentResponse:
     trace: Trace | None = None
     routing_decision: RoutingDecision | None = None
     total_steps: int = 0
+    total_usage: dict[str, int] = field(default_factory=lambda: {"input_tokens": 0, "output_tokens": 0})
 
 
 # ---------------------------------------------------------------------------
@@ -171,6 +172,9 @@ class ReActLoop:
         # Profile memory — injected by AgentRuntime for feedback loop
         self._profile_memory: Any = None
 
+        # Token usage accumulated across all LLM calls in this run
+        self._total_usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
+
     # -- public API ----------------------------------------------------------
 
     async def run(
@@ -182,6 +186,7 @@ class ReActLoop:
     ) -> AgentResponse:
         """Run the full ReAct loop for *user_input*."""
         state = AgentState()
+        self._total_usage = {"input_tokens": 0, "output_tokens": 0}
         if self._runtime_memory is not None:
             self._runtime_memory.clear_tool_messages()
         self._tool_messages = []
@@ -479,6 +484,7 @@ class ReActLoop:
             trace=trace,
             routing_decision=routing_decision,
             total_steps=len(state.steps),
+            total_usage=dict(self._total_usage),
         )
 
     # -- internal steps ------------------------------------------------------
@@ -504,6 +510,9 @@ class ReActLoop:
                     messages, tool_definitions,
                 )
                 thought_content = response.text
+                if response.usage:
+                    self._total_usage["input_tokens"] += response.usage.get("input_tokens", 0)
+                    self._total_usage["output_tokens"] += response.usage.get("output_tokens", 0)
 
                 if response.tool_calls:
                     actions = [

@@ -22,3 +22,4 @@ class ToolCallResponse:
     tool_calls: list[ToolCall] = field(default_factory=list)
     stop_reason: str = "end_turn"  # "tool_use" | "end_turn"
     raw_response: Any = None
+    usage: dict[str, int] | None = None

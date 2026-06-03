@@ -35,6 +35,7 @@ from open_agent.hooks.builtin import welcome_hook, pre_check_hook, audit_hook
 from open_agent.mcp_integration import MCPServerManager, ServerConfig, TransportType
 from open_agent.subagent.manager import SubagentManager
 from open_agent.tools.subagent import SubagentTool
+from open_agent.cost import CostTracker
 
 logger = logging.getLogger("open_agent")
 
@@ -143,6 +144,11 @@ class AgentRuntime(BaseComponent):
 
         # Sub-agent manager
         self._subagent_manager: SubagentManager | None = None
+
+        # Cost tracking
+        self._cost_tracker: CostTracker | None = None
+        if self.config.cost_tracking.enabled:
+            self._cost_tracker = CostTracker()
 
     async def on_start(self) -> None:
         """Initialize all subsystems."""
@@ -505,6 +511,14 @@ class AgentRuntime(BaseComponent):
         for skill_info in matched_skills:
             self.skill_matcher.cleanup(routing_decision.domain.domain, user_input)
 
+        # Record usage in cost tracker
+        if self._cost_tracker and response.total_usage:
+            self._cost_tracker.record(
+                model=self.config.model.name,
+                input_tokens=response.total_usage.get("input_tokens", 0),
+                output_tokens=response.total_usage.get("output_tokens", 0),
+            )
+
         duration_ms = (time.time() - start_time) * 1000
 
         logger.info(
@@ -526,6 +540,7 @@ class AgentRuntime(BaseComponent):
             metadata={
                 "matched_skills": [s["name"] for s in matched_skills],
                 "total_steps": response.total_steps,
+                "usage": response.total_usage,
                 "steps": [
                     {
                         "thought": step.thought.content if step.thought else None,

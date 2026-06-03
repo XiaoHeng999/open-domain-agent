@@ -171,11 +171,20 @@ class OpenAIProvider(ModelProvider):
                 ))
 
         stop_reason = "tool_use" if tool_calls else "end_turn"
+
+        usage = None
+        if hasattr(response, "usage") and response.usage:
+            usage = {
+                "input_tokens": response.usage.prompt_tokens or 0,
+                "output_tokens": response.usage.completion_tokens or 0,
+            }
+
         return ToolCallResponse(
             text=text,
             tool_calls=tool_calls,
             stop_reason=stop_reason,
             raw_response=response,
+            usage=usage,
         )
 
 
@@ -271,11 +280,19 @@ class AnthropicProvider(ModelProvider):
                     input=block.input,
                 ))
 
+        usage = None
+        if hasattr(response, "usage") and response.usage:
+            usage = {
+                "input_tokens": response.usage.input_tokens or 0,
+                "output_tokens": response.usage.output_tokens or 0,
+            }
+
         return ToolCallResponse(
             text="\n".join(text_parts),
             tool_calls=tool_calls,
             stop_reason=response.stop_reason or "end_turn",
             raw_response=response,
+            usage=usage,
         )
 
 
