@@ -3,7 +3,7 @@
   "02-harden-docker-sandbox": "done",
   "03-block-symlink-traversal": "done",
   "04-fix-tool-safety-declarations": "done",
-  "05-output-validation-always-runs": "doing",
+  "05-output-validation-always-runs": "done",
   "06-read-only-tool-result-caching": "pending",
   "07-parallel-tool-execution": "pending",
   "08-runtimememory-manages-tool-messages": "pending",
