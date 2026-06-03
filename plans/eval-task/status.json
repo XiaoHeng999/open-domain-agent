@@ -1,5 +1,5 @@
 {
-  "01-fix-streaming-toolcalls-and-deepseek-url": "doing",
+  "01-fix-streaming-toolcalls-and-deepseek-url": "done",
   "02-create-evals-smoke-scenarios": "pending",
   "03-wire-cli-eval-to-runtime": "pending",
   "04-eval-result-persistence": "pending",
