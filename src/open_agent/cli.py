@@ -192,6 +192,22 @@ def tool_group(
         from open_agent.registry import scan_builtin_tools
         scan_builtin_tools(registry, cfg)
 
+        # Register SearchTool (only needs workspace, always available)
+        from open_agent.tools.search import SearchTool
+        if not registry.has("search"):
+            registry.register(SearchTool(workspace=cfg.workspace))
+
+        # Show placeholders for runtime-dependent tools
+        from open_agent.tools.self import SelfTool
+        from open_agent.tools.sandbox_control import SandboxControlTool
+        from open_agent.tools.mcp_client import MCPClientTool
+        if not registry.has("self"):
+            registry.register(SelfTool(react_loop=None, runtime=None))
+        if not registry.has("sandbox_control"):
+            registry.register(SandboxControlTool(sandbox=None))
+        if not registry.has("mcp_client"):
+            registry.register(MCPClientTool(mcp_manager=None))
+
         table = Table(title="Registered Tools")
         table.add_column("Name", style="cyan")
         table.add_column("Description")

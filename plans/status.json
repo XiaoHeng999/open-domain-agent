@@ -1,6 +1,6 @@
 {
-  "01-register-all-4-new-tools": "pending",
-  "02-harden-docker-sandbox": "doing",
+  "01-register-all-4-new-tools": "doing",
+  "02-harden-docker-sandbox": "done",
   "03-block-symlink-traversal": "done",
   "04-fix-tool-safety-declarations": "pending",
   "05-output-validation-always-runs": "pending",

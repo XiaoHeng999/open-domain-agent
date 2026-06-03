@@ -147,11 +147,17 @@ class ToolRegistry:
         return [tool.to_schema() for tool in self._tools.values()]
 
 
-def scan_builtin_tools(registry: ToolRegistry, config: Any) -> None:
+def scan_builtin_tools(registry: ToolRegistry, config: Any, **runtime_kwargs: Any) -> None:
     """Auto-discover and register all built-in tools.
 
     Imports tool modules from open_agent.tools and registers Tool subclasses.
     Conditional registration based on config (e.g. exec enable, API keys).
+
+    Optional runtime_kwargs for tools that need runtime dependencies:
+    - react_loop: ReActLoop instance (for SelfTool)
+    - runtime: AgentRuntime instance (for SelfTool)
+    - sandbox: Sandbox instance (for SandboxControlTool)
+    - mcp_manager: MCPServerManager instance (for MCPClientTool)
     """
     # Filesystem tools
     from open_agent.tools.filesystem import (
@@ -198,3 +204,24 @@ def scan_builtin_tools(registry: ToolRegistry, config: Any) -> None:
     # Todo tool
     from open_agent.tools.todo import TodoTool
     registry.register(TodoTool())
+
+    # Search tool (code search via ripgrep/glob) — always registered with workspace
+    from open_agent.tools.search import SearchTool
+    registry.register(SearchTool(workspace=workspace))
+
+    # Runtime-dependent tools — registered only when their dependencies are provided
+    react_loop = runtime_kwargs.get("react_loop")
+    runtime = runtime_kwargs.get("runtime")
+    if react_loop is not None or runtime is not None:
+        from open_agent.tools.self import SelfTool
+        registry.register(SelfTool(react_loop=react_loop, runtime=runtime))
+
+    sandbox = runtime_kwargs.get("sandbox")
+    if sandbox is not None:
+        from open_agent.tools.sandbox_control import SandboxControlTool
+        registry.register(SandboxControlTool(sandbox=sandbox))
+
+    mcp_manager = runtime_kwargs.get("mcp_manager")
+    if mcp_manager is not None:
+        from open_agent.tools.mcp_client import MCPClientTool
+        registry.register(MCPClientTool(mcp_manager=mcp_manager))

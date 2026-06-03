@@ -168,7 +168,12 @@ class AgentRuntime(BaseComponent):
             max_tool_result_tokens=self.config.memory.max_tool_result_tokens,
             permission_guard=self.permission_guard,
         )
-        scan_builtin_tools(self.tool_registry, self.config)
+        scan_builtin_tools(
+            self.tool_registry, self.config,
+            react_loop=self.react_loop,
+            runtime=self,
+            sandbox=self.sandbox,
+        )
 
         # Replace ExecTool with sandbox-injected version
         await self._inject_sandbox_to_exec_tool()
@@ -271,6 +276,12 @@ class AgentRuntime(BaseComponent):
                 *[_start_mcp_server(srv) for srv in mcp_config.servers],
                 return_exceptions=True,
             )
+
+        # Register MCPClientTool if MCP manager is available
+        if self._mcp_manager is not None:
+            from open_agent.tools.mcp_client import MCPClientTool
+            if not self.tool_registry.has("mcp_client"):
+                self.tool_registry.register(MCPClientTool(mcp_manager=self._mcp_manager))
 
         # Sub-agent: initialize manager and register SubagentTool
         subagent_cfg = self.config.subagent
