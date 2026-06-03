@@ -11,6 +11,39 @@ from open_agent.base import ModelProvider
 from open_agent.config import ModelConfig
 from open_agent.types import ToolCall, ToolCallResponse
 
+# Retry decorator for transient API errors
+try:
+    from tenacity import (
+        retry,
+        stop_after_attempt,
+        wait_exponential,
+        retry_if_exception,
+    )
+
+    def _is_transient(exc: BaseException) -> bool:
+        """Return True for transient HTTP errors that should be retried."""
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if status in (429, 502, 503):
+            return True
+        # Connection errors (timeouts, network failures)
+        if isinstance(exc, (ConnectionError, TimeoutError, OSError)):
+            return True
+        # httpx transport errors
+        if type(exc).__name__ in ("ConnectError", "ReadTimeout", "PoolTimeout"):
+            return True
+        return False
+
+    _api_retry = retry(
+        retry=retry_if_exception(_is_transient),
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=4),
+        reraise=True,
+    )
+except ImportError:
+    # tenacity not installed — no retry
+    def _api_retry(fn):
+        return fn
+
 logger = logging.getLogger("open_agent")
 
 
@@ -58,8 +91,13 @@ class OpenAIProvider(ModelProvider):
         except ImportError:
             raise ImportError("Install openai: pip install openai")
 
+    @_api_retry
+    async def _openai_create(self, **kwargs: Any) -> Any:
+        """Raw OpenAI API call with retry on transient errors."""
+        return await self._client.chat.completions.create(**kwargs)
+
     async def complete(self, messages: list[dict[str, Any]], **kwargs: Any) -> str:
-        response = await self._client.chat.completions.create(
+        response = await self._openai_create(
             model=self.config.name,
             messages=messages,
             temperature=kwargs.get("temperature", self.config.temperature),
@@ -75,7 +113,7 @@ class OpenAIProvider(ModelProvider):
             DeprecationWarning,
             stacklevel=2,
         )
-        response = await self._client.chat.completions.create(
+        response = await self._openai_create(
             model=self.config.name,
             messages=messages,
             temperature=0.0,
@@ -107,7 +145,7 @@ class OpenAIProvider(ModelProvider):
     ) -> ToolCallResponse:
         """Call OpenAI API with function-calling tools."""
         openai_tools = _anthropic_to_openai_tools(tool_definitions)
-        response = await self._client.chat.completions.create(
+        response = await self._openai_create(
             model=self.config.name,
             messages=messages,
             tools=openai_tools,
@@ -159,6 +197,11 @@ class AnthropicProvider(ModelProvider):
         except ImportError:
             raise ImportError("Install anthropic: pip install anthropic")
 
+    @_api_retry
+    async def _anthropic_create(self, **kwargs: Any) -> Any:
+        """Raw Anthropic API call with retry on transient errors."""
+        return await self._client.messages.create(**kwargs)
+
     async def complete(self, messages: list[dict[str, Any]], **kwargs: Any) -> str:
         system = None
         user_messages = []
@@ -168,9 +211,10 @@ class AnthropicProvider(ModelProvider):
             else:
                 user_messages.append(m)
 
-        response = await self._client.messages.create(
+        response = await self._anthropic_create(
             model=self.config.name,
             max_tokens=kwargs.get("max_tokens", self.config.max_tokens),
+            temperature=kwargs.get("temperature", self.config.temperature),
             system=system or "",
             messages=user_messages,
         )
@@ -205,9 +249,10 @@ class AnthropicProvider(ModelProvider):
             else:
                 user_messages.append(m)
 
-        response = await self._client.messages.create(
+        response = await self._anthropic_create(
             model=self.config.name,
             max_tokens=kwargs.get("max_tokens", self.config.max_tokens),
+            temperature=kwargs.get("temperature", self.config.temperature),
             system=system or "",
             messages=user_messages,
             tools=tool_definitions,
