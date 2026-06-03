@@ -58,7 +58,7 @@ class MCPClientTool(Tool):
 
     @property
     def safety_checks(self) -> list[str]:
-        return ["command"]
+        return ["url"]
 
     async def execute(self, **kwargs: Any) -> str:
         action = kwargs.get("action", "")

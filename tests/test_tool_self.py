@@ -30,7 +30,7 @@ class TestSelfTool:
 
     def test_safety_checks(self):
         tool = SelfTool()
-        assert "config" in tool.safety_checks
+        assert tool.safety_checks == []
         assert tool.read_only is False
 
     @pytest.mark.asyncio

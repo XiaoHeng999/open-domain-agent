@@ -56,7 +56,7 @@ class SelfTool(Tool):
 
     @property
     def safety_checks(self) -> list[str]:
-        return ["config"]
+        return []
 
     async def execute(self, **kwargs: Any) -> str:
         action = kwargs.get("action", "")

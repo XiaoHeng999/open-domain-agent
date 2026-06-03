@@ -2,7 +2,7 @@
   "01-register-all-4-new-tools": "done",
   "02-harden-docker-sandbox": "done",
   "03-block-symlink-traversal": "done",
-  "04-fix-tool-safety-declarations": "pending",
+  "04-fix-tool-safety-declarations": "doing",
   "05-output-validation-always-runs": "pending",
   "06-read-only-tool-result-caching": "pending",
   "07-parallel-tool-execution": "pending",

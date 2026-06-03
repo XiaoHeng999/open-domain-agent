@@ -42,7 +42,7 @@ class TestMCPClientTool:
 
     def test_safety_checks(self):
         tool = MCPClientTool(mcp_manager=MagicMock())
-        assert "command" in tool.safety_checks
+        assert tool.safety_checks == ["url"]
         assert tool.read_only is False
 
     @pytest.mark.asyncio
