@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Optional
 
 import typer
+from prompt_toolkit import prompt as _ptk_prompt
+from prompt_toolkit.shortcuts import PromptSession
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
@@ -88,11 +90,13 @@ def chat(
 
     async def _run():
         await runtime.on_start()
+        session: PromptSession[str] = PromptSession()
         try:
             while True:
                 try:
-                    # Read input inside the async loop so we can yield
-                    user_input = input("\033[1;36myour prompt:\033[0m ").strip()
+                    user_input = (await session.prompt_async(
+                        "\033[1;36myour prompt:\033[0m ",
+                    )).strip()
                 except (KeyboardInterrupt, EOFError):
                     break
                 if user_input.lower() in ("exit", "quit"):
@@ -148,18 +152,65 @@ def chat(
 def eval_cmd(
     suite: str = typer.Option("smoke", "--suite", "-s", help="Eval suite name"),
     config: Optional[str] = typer.Option(None, "--config", "-c", help="Config YAML path"),
+    scenarios_dir: Optional[str] = typer.Option(None, "--dir", "-d", help="Scenarios directory"),
 ) -> None:
     """Run evaluation suite."""
+    from open_agent.eval.runner import EvalRunner
+
     cfg = load_config(config)
     console.print(Panel(f"[bold]Running eval suite:[/] {suite}", title="Evaluation"))
 
+    scenarios_path = Path(scenarios_dir) if scenarios_dir else Path("evals")
+    runner = EvalRunner(scenarios_dir=scenarios_path)
+
+    scenarios = runner.load_suite(suite)
+    if not scenarios:
+        console.print(f"[yellow]No scenarios found in {scenarios_path / suite}[/yellow]")
+        return
+
+    console.print(f"[dim]Loaded {len(scenarios)} scenario(s)[/dim]\n")
+
+    async def _run():
+        return await runner.run_suite(suite)
+
+    try:
+        results = _run_async(_run())
+    except NotImplementedError:
+        console.print("[yellow]Runtime not configured — showing loaded scenarios only.[/yellow]")
+        table = Table(title="Scenarios")
+        table.add_column("Name", style="cyan")
+        table.add_column("Input")
+        for s in scenarios:
+            table.add_row(s["name"], s["input"][:60])
+        console.print(table)
+        return
+    except Exception as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(1)
+
     table = Table(title="Eval Results")
     table.add_column("Scenario", style="cyan")
-    table.add_column("Status", style="green")
-    table.add_column("Score", justify="right")
-    table.add_column("Duration (ms)", justify="right")
-    table.add_row("(no scenarios yet)", "-", "-", "-")
+    table.add_column("Status")
+    table.add_column("Details")
+
+    passed = 0
+    failed = 0
+    for r in results:
+        status = r["status"]
+        if status == "pass":
+            passed += 1
+            style = "green"
+        else:
+            failed += 1
+            style = "red"
+        details = "; ".join(
+            f"{c['type']}: {'ok' if c['passed'] else 'FAIL'}"
+            for c in r.get("checks", [])
+        )
+        table.add_row(r["name"], f"[{style}]{status}[/{style}]", details)
+
     console.print(table)
+    console.print(f"\n[bold]Summary:[/] {passed} passed, {failed} failed, {len(results)} total")
 
 
 @app.command()

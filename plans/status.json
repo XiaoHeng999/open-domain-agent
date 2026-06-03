@@ -17,5 +17,5 @@
   "16-cost-tracking": "done",
   "17-prompt-caching": "done",
   "18-task-cancellation": "done",
-  "19-eval-runner": "pending"
+  "19-eval-runner": "done"
 }
