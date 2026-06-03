@@ -5,7 +5,7 @@ import tempfile
 import pytest
 
 from open_agent.tools.filesystem import (
-    EditFileTool, ListDirTool, ReadFileTool, WriteFileTool,
+    EditFileTool, ListDirTool, ReadFileTool, WriteFileTool, _resolve_path,
 )
 
 
@@ -203,3 +203,69 @@ class TestListDirTool:
     async def test_read_only(self, workspace):
         tool = ListDirTool(workspace=workspace)
         assert tool.read_only is True
+
+
+# -- Symlink traversal tests --
+
+class TestSymlinkTraversal:
+    """Ensure symlinks pointing outside the workspace are blocked."""
+
+    def test_symlink_outside_workspace_rejected(self, workspace):
+        outside = tempfile.mkdtemp()
+        target = os.path.join(outside, "secret.txt")
+        with open(target, "w") as f:
+            f.write("secret data")
+
+        link = os.path.join(workspace, "evil_link")
+        os.symlink(target, link)
+
+        with pytest.raises(ValueError, match="escapes workspace"):
+            _resolve_path("evil_link", workspace)
+
+        os.remove(link)
+        os.remove(target)
+        os.rmdir(outside)
+
+    def test_symlink_inside_workspace_allowed(self, workspace):
+        real = os.path.join(workspace, "real.txt")
+        with open(real, "w") as f:
+            f.write("ok")
+
+        link = os.path.join(workspace, "link.txt")
+        os.symlink("real.txt", link)
+
+        resolved = _resolve_path("link.txt", workspace)
+        assert str(resolved) == os.path.realpath(link)
+
+    @pytest.mark.asyncio
+    async def test_read_via_symlink_blocked(self, workspace):
+        outside = tempfile.mkdtemp()
+        target = os.path.join(outside, "secret.txt")
+        with open(target, "w") as f:
+            f.write("secret")
+
+        link = os.path.join(workspace, "escape")
+        os.symlink(target, link)
+
+        tool = ReadFileTool(workspace=workspace)
+        result = await tool.execute(path="escape")
+        assert "Error" in result
+
+        os.remove(link)
+        os.remove(target)
+        os.rmdir(outside)
+
+    @pytest.mark.asyncio
+    async def test_write_via_symlink_blocked(self, workspace):
+        outside = tempfile.mkdtemp()
+        target = os.path.join(outside, "secret.txt")
+
+        link = os.path.join(workspace, "escape")
+        os.symlink(target, link)
+
+        tool = WriteFileTool(workspace=workspace)
+        result = await tool.execute(path="escape", content="hacked")
+        assert "Error" in result
+
+        os.remove(link)
+        os.rmdir(outside)

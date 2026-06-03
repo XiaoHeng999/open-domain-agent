@@ -12,9 +12,13 @@ from open_agent.tools.base import Tool
 
 
 def _resolve_path(path: str, workspace: str) -> Path:
-    """Resolve path relative to workspace, raising on traversal."""
-    workspace = os.path.abspath(workspace)
-    resolved = os.path.abspath(os.path.join(workspace, path))
+    """Resolve path relative to workspace, raising on traversal.
+
+    Uses realpath to follow symlinks before the boundary check,
+    preventing symlink-based path traversal attacks.
+    """
+    workspace = os.path.realpath(workspace)
+    resolved = os.path.realpath(os.path.join(workspace, path))
     if not resolved.startswith(workspace):
         raise ValueError(f"Path escapes workspace: {path}")
     return Path(resolved)

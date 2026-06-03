@@ -1,0 +1,21 @@
+{
+  "01-register-all-4-new-tools": "pending",
+  "02-harden-docker-sandbox": "pending",
+  "03-block-symlink-traversal": "doing",
+  "04-fix-tool-safety-declarations": "pending",
+  "05-output-validation-always-runs": "pending",
+  "06-read-only-tool-result-caching": "pending",
+  "07-parallel-tool-execution": "pending",
+  "08-runtimememory-manages-tool-messages": "pending",
+  "09-provider-hardening": "pending",
+  "10-async-hitl-approval": "pending",
+  "11-final-answer-summary": "pending",
+  "12-feedback-loop-via-profile-memory": "pending",
+  "13-conversation-persistence-sqlite": "pending",
+  "14-async-cli-input": "pending",
+  "15-streaming-output": "pending",
+  "16-cost-tracking": "pending",
+  "17-prompt-caching": "pending",
+  "18-task-cancellation": "pending",
+  "19-eval-runner": "pending"
+}
