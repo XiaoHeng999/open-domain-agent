@@ -452,6 +452,12 @@ class ReActLoop:
             state.final_answer = self._compose_final_answer(user_input, state)
         else:
             state.final_answer = "No steps were executed."
+
+        # Summarize if tool steps were executed
+        state.final_answer = await self._summarize_answer(
+            user_input, state, state.final_answer,
+        )
+
         state.finished = True
 
         if root_span:
@@ -904,3 +910,54 @@ class ReActLoop:
             )
 
         return f"Processed: {user_input}"
+
+    async def _summarize_answer(
+        self,
+        user_input: str,
+        state: AgentState,
+        raw_answer: str,
+    ) -> str:
+        """Summarize tool execution results into a concise final answer.
+
+        Returns the raw answer unchanged if:
+        - No tool steps were executed (direct LLM answer)
+        - The provider doesn't support summarization
+        """
+        # Only summarize when tool steps were executed
+        tool_steps = [
+            s for s in state.steps
+            if s.action and s.action.tool_name and s.observation
+        ]
+        if not tool_steps:
+            return raw_answer
+
+        # Build step summaries for the summarization prompt
+        step_summaries: list[str] = []
+        for s in tool_steps:
+            action_desc = f"{s.action.tool_name}({json.dumps(s.action.args, sort_keys=True)})"
+            obs_preview = s.observation.content[:300]
+            if len(s.observation.content) > 300:
+                obs_preview += "..."
+            step_summaries.append(
+                f"- {action_desc} → {'✓' if s.observation.success else '✗'} {obs_preview}"
+            )
+
+        summary_prompt = (
+            f"The user asked: {user_input}\n\n"
+            f"Tool execution results:\n" + "\n".join(step_summaries) + "\n\n"
+            f"Provide a concise, helpful summary of the results for the user. "
+            f"Focus on what was accomplished and the key findings."
+        )
+
+        try:
+            if hasattr(self._provider, "complete"):
+                summary = await self._provider.complete(
+                    [{"role": "user", "content": summary_prompt}],
+                    max_tokens=256,
+                )
+                if summary and len(summary) > 10:
+                    return summary
+        except Exception as exc:
+            logger.debug("Summary generation failed, using raw answer: %s", exc)
+
+        return raw_answer
