@@ -153,6 +153,7 @@ def eval_cmd(
     suite: str = typer.Option("smoke", "--suite", "-s", help="Eval suite name"),
     config: Optional[str] = typer.Option(None, "--config", "-c", help="Config YAML path"),
     scenarios_dir: Optional[str] = typer.Option(None, "--dir", "-d", help="Scenarios directory"),
+    no_runtime: bool = typer.Option(False, "--no-runtime", help="Only load scenarios without running"),
 ) -> None:
     """Run evaluation suite."""
     from open_agent.eval.runner import EvalRunner
@@ -170,8 +171,36 @@ def eval_cmd(
 
     console.print(f"[dim]Loaded {len(scenarios)} scenario(s)[/dim]\n")
 
+    # --no-runtime: just display loaded scenarios
+    if no_runtime:
+        table = Table(title="Scenarios")
+        table.add_column("Name", style="cyan")
+        table.add_column("Input")
+        for s in scenarios:
+            table.add_row(s["name"], s["input"][:60])
+        console.print(table)
+        return
+
+    # Try to create AgentRuntime for real execution
+    runtime = None
+    try:
+        from open_agent.runtime import AgentRuntime
+        runtime = AgentRuntime(config=cfg)
+    except Exception:
+        pass
+
+    if runtime is not None:
+        runner._runtime = runtime
+
     async def _run():
-        return await runner.run_suite(suite)
+        if runtime is not None:
+            await runtime.on_start()
+            try:
+                return await runner.run_suite(suite)
+            finally:
+                await runtime.on_stop()
+        else:
+            return await runner.run_suite(suite)
 
     try:
         results = _run_async(_run())
