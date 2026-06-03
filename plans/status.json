@@ -1,5 +1,5 @@
 {
-  "01-register-all-4-new-tools": "doing",
+  "01-register-all-4-new-tools": "done",
   "02-harden-docker-sandbox": "done",
   "03-block-symlink-traversal": "done",
   "04-fix-tool-safety-declarations": "pending",
