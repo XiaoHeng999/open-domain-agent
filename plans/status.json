@@ -16,6 +16,6 @@
   "15-streaming-output": "pending",
   "16-cost-tracking": "done",
   "17-prompt-caching": "done",
-  "18-task-cancellation": "pending",
+  "18-task-cancellation": "done",
   "19-eval-runner": "pending"
 }

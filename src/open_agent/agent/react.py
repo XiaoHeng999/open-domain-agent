@@ -175,6 +175,9 @@ class ReActLoop:
         # Token usage accumulated across all LLM calls in this run
         self._total_usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
 
+        # Cancellation token — injected by AgentRuntime for graceful shutdown
+        self._cancellation_token: Any = None
+
     # -- public API ----------------------------------------------------------
 
     async def run(
@@ -237,6 +240,11 @@ class ReActLoop:
                 # -- Anomaly termination check --
                 if should_terminate:
                     logger.warning("Terminating due to detected anomaly")
+                    break
+
+                # -- Cancellation check --
+                if self._cancellation_token and self._cancellation_token.is_cancelled:
+                    logger.info("react.cancelled at iteration %d", iteration)
                     break
 
                 step = ReActStep(index=iteration)
