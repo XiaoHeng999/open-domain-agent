@@ -67,6 +67,7 @@ class Observation:
     tool_use_id: str = ""
     success: bool = True
     step_index: int = 0
+    tool_messages: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -289,15 +290,14 @@ class ReActLoop:
                     repeat_count = 0
                 last_action_keys = current_keys
 
-                # 2. Execute each tool action
-                for act in actions:
-                    # Check if all tools are degraded — force terminate
-                    if degraded_tools and all(
-                        a.tool_name in degraded_tools for a in actions
-                    ):
-                        tool_failures = "; ".join(
-                            f"{name} (consecutive failures)" for name in sorted(degraded_tools)
-                        )
+                # 2. Pre-check: all tools degraded?
+                if degraded_tools and all(
+                    a.tool_name in degraded_tools for a in actions
+                ):
+                    tool_failures = "; ".join(
+                        f"{name} (consecutive failures)" for name in sorted(degraded_tools)
+                    )
+                    for act in actions:
                         obs = Observation(
                             content=f"All available tools are degraded. {tool_failures}",
                             tool_name=act.tool_name,
@@ -310,11 +310,37 @@ class ReActLoop:
                             action=act,
                             observation=obs,
                         ))
-                        if self._runtime_memory is not None:
-                            self._runtime_memory.task_state.mark_finished("all_tools_degraded")
-                        break
+                    if self._runtime_memory is not None:
+                        self._runtime_memory.task_state.mark_finished("all_tools_degraded")
+                    break
 
-                    obs = await self._execute_action(act, iteration, trace)
+                # 3. Execute actions — parallel for multiple, sequential for single
+                import asyncio as _asyncio
+                if len(actions) > 1:
+                    raw_results = await _asyncio.gather(
+                        *(self._execute_action(act, iteration, trace) for act in actions),
+                        return_exceptions=True,
+                    )
+                    # Convert any unexpected exceptions to failed Observations
+                    observations: list[Observation] = []
+                    for act, res in zip(actions, raw_results):
+                        if isinstance(res, Observation):
+                            observations.append(res)
+                        else:
+                            observations.append(Observation(
+                                content=f"Unexpected error: {res}",
+                                tool_name=act.tool_name,
+                                success=False,
+                                step_index=iteration,
+                            ))
+                else:
+                    observations = [await self._execute_action(actions[0], iteration, trace)]
+
+                # 4. Post-process: append messages, health tracking, anomaly detection
+                from collections import Counter
+                for idx, (act, obs) in enumerate(zip(actions, observations)):
+                    # Append tool messages in original order
+                    self._tool_messages.extend(obs.tool_messages)
 
                     # Update tool health tracking
                     if obs.success:
@@ -331,19 +357,19 @@ class ReActLoop:
                         error_message_history.append(obs.content)
 
                     # Check anomaly thresholds
-                    from collections import Counter
-                    tool_counts = Counter(tool_call_history)
-                    for t_name, count in tool_counts.items():
-                        if count >= 4:
-                            logger.warning("Tool loop detected: %s called %d times", t_name, count)
-                            obs = Observation(
-                                content=f"Agent terminated: tool loop detected ({t_name} called 4+ times). Consider simplifying the task or checking tool availability.",
-                                tool_name=t_name,
-                                success=False,
-                                step_index=iteration,
-                            )
-                            should_terminate = True
-                            break
+                    if not should_terminate:
+                        tool_counts = Counter(tool_call_history)
+                        for t_name, count in tool_counts.items():
+                            if count >= 4:
+                                logger.warning("Tool loop detected: %s called %d times", t_name, count)
+                                obs = Observation(
+                                    content=f"Agent terminated: tool loop detected ({t_name} called 4+ times). Consider simplifying the task or checking tool availability.",
+                                    tool_name=t_name,
+                                    success=False,
+                                    step_index=iteration,
+                                )
+                                should_terminate = True
+                                break
 
                     if not should_terminate:
                         error_counts = Counter(error_message_history)
@@ -366,7 +392,7 @@ class ReActLoop:
 
                     state.add_step(ReActStep(
                         index=iteration,
-                        thought=Thought(content=thought_content, step_index=iteration) if act == actions[0] else None,
+                        thought=Thought(content=thought_content, step_index=iteration) if idx == 0 else None,
                         action=act,
                         observation=obs,
                     ))
@@ -560,6 +586,7 @@ class ReActLoop:
                     hook_prefix += hr.content + "\n"
 
         start_time = None
+        tool_msgs: list[dict] = []
         try:
             if self._hook_manager is not None:
                 import time as _time
@@ -580,9 +607,10 @@ class ReActLoop:
                 content = str(result)
                 success = not content.startswith("Error:")
 
-                # Build tool_result message for next LLM call
+                # Build tool_result messages for next LLM call
+                tool_msgs.clear()
                 if action.tool_use_id:
-                    self._tool_messages.append({
+                    tool_msgs.append({
                         "role": "assistant",
                         "tool_calls": [{
                             "id": action.tool_use_id,
@@ -593,7 +621,7 @@ class ReActLoop:
                             },
                         }],
                     })
-                    self._tool_messages.append({
+                    tool_msgs.append({
                         "role": "tool",
                         "tool_call_id": action.tool_use_id,
                         "content": content,
@@ -683,9 +711,8 @@ class ReActLoop:
             tool_use_id=action.tool_use_id,
             success=success,
             step_index=iteration,
+            tool_messages=tool_msgs,
         )
-
-    # -- helpers -------------------------------------------------------------
 
     async def _try_recover(
         self,
