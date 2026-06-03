@@ -167,6 +167,7 @@ class AgentRuntime(BaseComponent):
             safety_manager=self.safety_manager,
             max_tool_result_tokens=self.config.memory.max_tool_result_tokens,
             permission_guard=self.permission_guard,
+            runtime_memory=self._runtime_memory,
         )
         scan_builtin_tools(
             self.tool_registry, self.config,

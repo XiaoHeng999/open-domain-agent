@@ -29,12 +29,14 @@ class ToolRegistry:
         safety_manager: Any = None,
         max_tool_result_tokens: int = 2000,
         permission_guard: Any = None,
+        runtime_memory: Any = None,
     ) -> None:
         self._tools: dict[str, Tool] = {}
         self._tags: dict[str, list[str]] = {}
         self._safety_manager = safety_manager
         self._max_tool_result_tokens = max_tool_result_tokens
         self._permission_guard = permission_guard
+        self._runtime_memory = runtime_memory
         self._chain = default_chain(
             safety_manager=safety_manager,
             permission_guard=permission_guard,
@@ -129,6 +131,12 @@ class ToolRegistry:
         if errors:
             return f"Error: Validation failed: {'; '.join(errors)}"
 
+        # Cache check for read-only tools
+        if tool.read_only and self._runtime_memory is not None:
+            cached = self._runtime_memory.cache_get(name, params)
+            if cached is not None:
+                return cached
+
         # Stage 3+: middleware chain (safety → permission → truncate → execute)
         ctx = MiddlewareContext(
             tool=tool,
@@ -138,7 +146,13 @@ class ToolRegistry:
             permission_guard=self._permission_guard,
             max_tool_result_tokens=self._max_tool_result_tokens,
         )
-        return await self._chain(ctx)
+        result = await self._chain(ctx)
+
+        # Cache store for read-only tools on successful execution
+        if tool.read_only and self._runtime_memory is not None and not result.startswith("Error:"):
+            self._runtime_memory.cache_put(name, params, result)
+
+        return result
 
     # ── Schema export ──
 

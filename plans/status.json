@@ -4,7 +4,7 @@
   "03-block-symlink-traversal": "done",
   "04-fix-tool-safety-declarations": "done",
   "05-output-validation-always-runs": "done",
-  "06-read-only-tool-result-caching": "pending",
+  "06-read-only-tool-result-caching": "doing",
   "07-parallel-tool-execution": "pending",
   "08-runtimememory-manages-tool-messages": "pending",
   "09-provider-hardening": "pending",
