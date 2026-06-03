@@ -57,7 +57,7 @@ class DockerSandbox(BaseComponent):
             effective_timeout = min(timeout, self.auto_timeout)
 
             async def _docker_exec():
-                exit_code, output = self._container.exec_run(cmd=f"bash -c '{command}'")
+                exit_code, output = self._container.exec_run(cmd=["bash", "-c", command])
                 return {"success": exit_code == 0, "exit_code": exit_code, "output": output.decode(errors="replace")}
 
             return await asyncio.wait_for(_docker_exec(), timeout=effective_timeout)
@@ -87,7 +87,22 @@ class DockerSandbox(BaseComponent):
         if not self._container:
             return {"success": False, "error": "Sandbox not started"}
         try:
-            self._container.exec_run(cmd=f"bash -c 'cat > {path} << \"ENDOFFILE\"\n{content}\nENDOFFILE'")
+            import tarfile
+            import io as _io
+            import os
+
+            filename = os.path.basename(path)
+            parent = os.path.dirname(path) or "/"
+
+            buf = _io.BytesIO()
+            with tarfile.open(fileobj=buf, mode="w") as tar:
+                data = content.encode()
+                info = tarfile.TarInfo(name=filename)
+                info.size = len(data)
+                tar.addfile(info, _io.BytesIO(data))
+            buf.seek(0)
+
+            self._container.put_archive(parent, buf)
             return {"success": True}
         except Exception as e:
             return {"success": False, "error": str(e)}
