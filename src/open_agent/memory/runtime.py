@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
+import sqlite3
+import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from open_agent.base import MemoryManager
@@ -29,6 +33,9 @@ class RuntimeMemory(MemoryManager):
     - rolling_summary: compressed earlier conversation
     - task_state: ReAct execution state (never compressed)
     - tool_result_cache: LRU cache keyed by (tool_name, args_hash)
+
+    When persistence is enabled (MemoryConfig.persistence_enabled), messages
+    are also written to SQLite for cross-session durability.
     """
 
     def __init__(self, config: MemoryConfig | None = None) -> None:
@@ -40,6 +47,12 @@ class RuntimeMemory(MemoryManager):
         self._task_state: TaskState = TaskState()
         self._tool_cache: OrderedDict[str, str] = OrderedDict()
         self._tool_messages: list[dict[str, Any]] = []
+        self._db_conn: sqlite3.Connection | None = None
+
+        if self._config.persistence_enabled:
+            self._init_db()
+            self._cleanup_old_records()
+            self._load_messages()
 
     # ------------------------------------------------------------------
     # MemoryManager ABC
@@ -69,6 +82,8 @@ class RuntimeMemory(MemoryManager):
             "RuntimeMemory add_message role=%s tokens=%d total=%d",
             role, msg.tokens, self._total_tokens(),
         )
+        if self._config.persistence_enabled and self._db_conn is not None:
+            await asyncio.to_thread(self._persist_message, role, content)
         await self._maybe_compress()
 
     async def get_context(self) -> list[dict[str, Any]]:
@@ -133,6 +148,78 @@ class RuntimeMemory(MemoryManager):
         self._tool_cache.clear()
         self._task_state = TaskState()
         self._tool_messages.clear()
+        if self._db_conn is not None:
+            try:
+                self._db_conn.execute("DELETE FROM messages")
+                self._db_conn.commit()
+            except sqlite3.Error:
+                pass
+
+    def close(self) -> None:
+        """Close the SQLite connection if open."""
+        if self._db_conn is not None:
+            try:
+                self._db_conn.close()
+            except sqlite3.Error:
+                pass
+            self._db_conn = None
+
+    # ------------------------------------------------------------------
+    # Persistence internals
+    # ------------------------------------------------------------------
+
+    def _init_db(self) -> None:
+        """Create the database and messages table."""
+        db_path = Path(self._config.persistence_db_path)
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._db_conn = sqlite3.connect(str(db_path), check_same_thread=False)
+        self._db_conn.execute(
+            "CREATE TABLE IF NOT EXISTS messages ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "role TEXT NOT NULL, "
+            "content TEXT NOT NULL, "
+            "timestamp REAL NOT NULL)"
+        )
+        self._db_conn.commit()
+
+    def _persist_message(self, role: str, content: str) -> None:
+        """Write a single message to SQLite."""
+        if self._db_conn is None:
+            return
+        try:
+            self._db_conn.execute(
+                "INSERT INTO messages (role, content, timestamp) VALUES (?, ?, ?)",
+                (role, content, time.time()),
+            )
+            self._db_conn.commit()
+        except sqlite3.Error:
+            logger.warning("Failed to persist message to SQLite", exc_info=True)
+
+    def _load_messages(self) -> None:
+        """Load messages from SQLite into the in-memory buffer."""
+        if self._db_conn is None:
+            return
+        try:
+            cur = self._db_conn.execute(
+                "SELECT role, content FROM messages ORDER BY id ASC"
+            )
+            for role, content in cur.fetchall():
+                self._messages.append(Message(role=role, content=content))
+        except sqlite3.Error:
+            logger.warning("Failed to load messages from SQLite", exc_info=True)
+
+    def _cleanup_old_records(self) -> None:
+        """Delete records older than retention_days."""
+        if self._db_conn is None:
+            return
+        cutoff = time.time() - self._config.persistence_retention_days * 86400
+        try:
+            self._db_conn.execute(
+                "DELETE FROM messages WHERE timestamp < ?", (cutoff,)
+            )
+            self._db_conn.commit()
+        except sqlite3.Error:
+            logger.warning("Failed to cleanup old records", exc_info=True)
 
     # ------------------------------------------------------------------
     # Tool messages (tool_use/tool_result pairs for LLM context)

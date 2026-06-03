@@ -76,6 +76,11 @@ class MemoryConfig(BaseModel):
     # Session todo
     todo_staleness_rounds: int = Field(default=3, ge=1)
 
+    # Persistence
+    persistence_enabled: bool = False
+    persistence_db_path: str = ".open_agent/memory/persistence/conversation.sqlite"
+    persistence_retention_days: int = Field(default=7, ge=1)
+
     # Backward compat aliases
     working_memory_token_limit: int = Field(default=8000, ge=100)
 
