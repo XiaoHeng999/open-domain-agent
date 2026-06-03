@@ -258,13 +258,28 @@ class AnthropicProvider(ModelProvider):
             else:
                 user_messages.append(m)
 
+        # Apply prompt caching markers when enabled
+        api_tools = list(tool_definitions)
+        api_system = system or ""
+        if self.config.caching:
+            # System message as list with cache_control on the last block
+            if api_system:
+                api_system = [
+                    {"type": "text", "text": api_system, "cache_control": {"type": "ephemeral"}},
+                ]
+            # Add cache_control to the last tool definition
+            if api_tools:
+                cached_tools = [dict(t) for t in api_tools]
+                cached_tools[-1] = {**cached_tools[-1], "cache_control": {"type": "ephemeral"}}
+                api_tools = cached_tools
+
         response = await self._anthropic_create(
             model=self.config.name,
             max_tokens=kwargs.get("max_tokens", self.config.max_tokens),
             temperature=kwargs.get("temperature", self.config.temperature),
-            system=system or "",
+            system=api_system,
             messages=user_messages,
-            tools=tool_definitions,
+            tools=api_tools,
         )
 
         text_parts: list[str] = []

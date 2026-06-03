@@ -46,6 +46,7 @@ class ModelConfig(BaseModel):
     max_tokens: int = Field(default=4096, ge=1)
     api_key: Optional[str] = Field(default=None, repr=False)
     base_url: Optional[str] = None
+    caching: bool = True
 
 
 class MemoryConfig(BaseModel):

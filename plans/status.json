@@ -15,7 +15,7 @@
   "14-async-cli-input": "done",
   "15-streaming-output": "pending",
   "16-cost-tracking": "done",
-  "17-prompt-caching": "pending",
+  "17-prompt-caching": "done",
   "18-task-cancellation": "pending",
   "19-eval-runner": "pending"
 }
