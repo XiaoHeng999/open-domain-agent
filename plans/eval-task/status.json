@@ -8,6 +8,6 @@
   "07-e2e-streaming-tool-calls": "pending",
   "08-e2e-task-cancellation": "pending",
   "09-e2e-run-smoke-eval-suite": "pending",
-  "10-boundary-tests-streaming": "pending",
-  "11-boundary-tests-cancellation-react-deepseek": "pending"
+  "10-boundary-tests-streaming": "done",
+  "11-boundary-tests-cancellation-react-deepseek": "done"
 }
