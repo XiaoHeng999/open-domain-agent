@@ -179,6 +179,8 @@ class ReActLoop:
     ) -> AgentResponse:
         """Run the full ReAct loop for *user_input*."""
         state = AgentState()
+        if self._runtime_memory is not None:
+            self._runtime_memory.clear_tool_messages()
         self._tool_messages = []
         self._domain_system_prompt = (
             routing_decision.domain.system_prompt
@@ -340,7 +342,10 @@ class ReActLoop:
                 from collections import Counter
                 for idx, (act, obs) in enumerate(zip(actions, observations)):
                     # Append tool messages in original order
-                    self._tool_messages.extend(obs.tool_messages)
+                    if obs.tool_messages:
+                        self._tool_messages.extend(obs.tool_messages)
+                        if self._runtime_memory is not None:
+                            self._runtime_memory.add_tool_messages(obs.tool_messages)
 
                     # Update tool health tracking
                     if obs.success:
@@ -828,8 +833,13 @@ class ReActLoop:
         # Current user input
         messages.append({"role": "user", "content": user_input})
 
-        # Append tool_use/tool_result messages from this loop run
-        for msg in self._tool_messages:
+        # Append tool_use/tool_result messages — prefer RuntimeMemory for budget enforcement
+        tool_msgs = (
+            self._runtime_memory.get_tool_messages()
+            if self._runtime_memory is not None
+            else self._tool_messages
+        )
+        for msg in tool_msgs:
             messages.append(msg)
 
         return messages

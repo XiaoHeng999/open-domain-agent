@@ -39,6 +39,7 @@ class RuntimeMemory(MemoryManager):
         self._summary_turn_start: int = 0
         self._task_state: TaskState = TaskState()
         self._tool_cache: OrderedDict[str, str] = OrderedDict()
+        self._tool_messages: list[dict[str, Any]] = []
 
     # ------------------------------------------------------------------
     # MemoryManager ABC
@@ -126,11 +127,37 @@ class RuntimeMemory(MemoryManager):
             self._tool_cache.popitem(last=False)
 
     async def clear(self) -> None:
-        """Remove all messages, summary, and cache."""
+        """Remove all messages, summary, cache, and tool messages."""
         self._messages.clear()
         self._rolling_summary = ""
         self._tool_cache.clear()
         self._task_state = TaskState()
+        self._tool_messages.clear()
+
+    # ------------------------------------------------------------------
+    # Tool messages (tool_use/tool_result pairs for LLM context)
+    # ------------------------------------------------------------------
+
+    def add_tool_messages(self, messages: list[dict[str, Any]]) -> None:
+        """Append tool messages and enforce token budget."""
+        self._tool_messages.extend(messages)
+        self._enforce_tool_message_budget()
+
+    def get_tool_messages(self) -> list[dict[str, Any]]:
+        """Return current tool messages."""
+        return list(self._tool_messages)
+
+    def clear_tool_messages(self) -> None:
+        """Clear tool messages only."""
+        self._tool_messages.clear()
+
+    def _enforce_tool_message_budget(self) -> None:
+        """Truncate oldest tool messages when they exceed the token budget."""
+        max_tokens = self._config.max_tool_result_tokens
+        total = sum(estimate_tokens(m.get("content", "")) for m in self._tool_messages)
+        while total > max_tokens and self._tool_messages:
+            removed = self._tool_messages.pop(0)
+            total -= estimate_tokens(removed.get("content", ""))
 
     # ------------------------------------------------------------------
     # Internals
