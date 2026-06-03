@@ -345,6 +345,41 @@ class TestOutputValidationMiddleware:
         assert "Error" in result
         assert "semantic validation failed" in result
 
+    async def test_validate_output_called_without_schema(self):
+        """validate_output() must be called even when output_schema is None."""
+
+        class _NoSchemaSemanticFail(Tool):
+            output_schema = None  # no JSON schema
+
+            @property
+            def name(self) -> str:
+                return "no_schema_semantic_fail"
+
+            @property
+            def description(self) -> str:
+                return "test"
+
+            @property
+            def parameters(self) -> dict:
+                return {"type": "object", "properties": {}}
+
+            def validate_output(self, result: str) -> list[str]:
+                return ["semantic check failed"]
+
+            async def execute(self, **kwargs):
+                return "some text"
+
+        mw = OutputValidationMiddleware()
+        tool = _NoSchemaSemanticFail()
+        ctx = _make_context(tool=tool)
+
+        async def _result():
+            return "some text"
+
+        result = await mw.process(ctx, _result)
+        assert "Error" in result
+        assert "semantic validation failed" in result
+
     async def test_string_result_skips_schema_validation(self):
         mw = OutputValidationMiddleware()
         tool = _SchemaTool()

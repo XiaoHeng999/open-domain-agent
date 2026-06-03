@@ -229,11 +229,11 @@ class OutputValidationMiddleware(ExecutionMiddleware):
                 if errors:
                     return f"Error: Output validation failed: {errors[0]}"
 
-            # Run semantic validation regardless
-            semantic_errors = context.tool.validate_output(result)
-            if semantic_errors:
-                msg = "; ".join(semantic_errors)
-                return f"Error: Output semantic validation failed: {msg}"
+        # Run semantic validation for every tool execution
+        semantic_errors = context.tool.validate_output(result)
+        if semantic_errors:
+            msg = "; ".join(semantic_errors)
+            return f"Error: Output semantic validation failed: {msg}"
 
         return result
 
