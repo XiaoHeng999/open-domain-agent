@@ -178,6 +178,9 @@ class ReActLoop:
         # Cancellation token — injected by AgentRuntime for graceful shutdown
         self._cancellation_token: Any = None
 
+        # Callback for streaming thought text to CLI
+        self._on_thought: Any = None
+
     # -- public API ----------------------------------------------------------
 
     async def run(
@@ -518,6 +521,8 @@ class ReActLoop:
                     messages, tool_definitions,
                 )
                 thought_content = response.text
+                if self._on_thought and thought_content:
+                    self._on_thought(thought_content)
                 if response.usage:
                     self._total_usage["input_tokens"] += response.usage.get("input_tokens", 0)
                     self._total_usage["output_tokens"] += response.usage.get("output_tokens", 0)

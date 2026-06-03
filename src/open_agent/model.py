@@ -144,14 +144,22 @@ class OpenAIProvider(ModelProvider):
         **kwargs: Any,
     ) -> ToolCallResponse:
         """Call OpenAI API with function-calling tools."""
+        stream = kwargs.pop("stream", False)
+        on_chunk = kwargs.pop("on_chunk", None)
         openai_tools = _anthropic_to_openai_tools(tool_definitions)
-        response = await self._openai_create(
-            model=self.config.name,
-            messages=messages,
-            tools=openai_tools,
-            temperature=kwargs.get("temperature", self.config.temperature),
-            max_tokens=kwargs.get("max_tokens", self.config.max_tokens),
-        )
+
+        api_kwargs = {
+            "model": self.config.name,
+            "messages": messages,
+            "tools": openai_tools,
+            "temperature": kwargs.get("temperature", self.config.temperature),
+            "max_tokens": kwargs.get("max_tokens", self.config.max_tokens),
+        }
+
+        if stream and on_chunk:
+            return await self._stream_openai(api_kwargs, on_chunk)
+
+        response = await self._openai_create(**api_kwargs)
 
         choice = response.choices[0]
         message = choice.message
@@ -185,6 +193,43 @@ class OpenAIProvider(ModelProvider):
             stop_reason=stop_reason,
             raw_response=response,
             usage=usage,
+        )
+
+    async def _stream_openai(
+        self,
+        api_kwargs: dict[str, Any],
+        on_chunk,
+    ) -> ToolCallResponse:
+        """Stream OpenAI API response, calling on_chunk for each text delta."""
+        api_kwargs["stream"] = True
+        chunks = await self._openai_create(**api_kwargs)
+
+        text_parts: list[str] = []
+        usage_data = None
+
+        async for chunk in chunks:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            if hasattr(delta, "content") and delta.content:
+                text_parts.append(delta.content)
+                if on_chunk:
+                    result = on_chunk(delta.content)
+                    if hasattr(result, "__await__"):
+                        await result
+            # Check for usage in final chunk
+            if hasattr(chunk, "usage") and chunk.usage:
+                usage_data = {
+                    "input_tokens": chunk.usage.prompt_tokens or 0,
+                    "output_tokens": chunk.usage.completion_tokens or 0,
+                }
+
+        return ToolCallResponse(
+            text="".join(text_parts),
+            tool_calls=[],
+            stop_reason="end_turn",
+            raw_response=None,
+            usage=usage_data,
         )
 
 
@@ -250,6 +295,8 @@ class AnthropicProvider(ModelProvider):
         **kwargs: Any,
     ) -> ToolCallResponse:
         """Call Anthropic API with native tool_use support."""
+        stream = kwargs.pop("stream", False)
+        on_chunk = kwargs.pop("on_chunk", None)
         system = None
         user_messages = []
         for m in messages:
@@ -273,14 +320,19 @@ class AnthropicProvider(ModelProvider):
                 cached_tools[-1] = {**cached_tools[-1], "cache_control": {"type": "ephemeral"}}
                 api_tools = cached_tools
 
-        response = await self._anthropic_create(
-            model=self.config.name,
-            max_tokens=kwargs.get("max_tokens", self.config.max_tokens),
-            temperature=kwargs.get("temperature", self.config.temperature),
-            system=api_system,
-            messages=user_messages,
-            tools=api_tools,
-        )
+        api_kwargs = {
+            "model": self.config.name,
+            "max_tokens": kwargs.get("max_tokens", self.config.max_tokens),
+            "temperature": kwargs.get("temperature", self.config.temperature),
+            "system": api_system,
+            "messages": user_messages,
+            "tools": api_tools,
+        }
+
+        if stream and on_chunk:
+            return await self._stream_anthropic(api_kwargs, on_chunk)
+
+        response = await self._anthropic_create(**api_kwargs)
 
         text_parts: list[str] = []
         tool_calls: list[ToolCall] = []
@@ -308,6 +360,65 @@ class AnthropicProvider(ModelProvider):
             stop_reason=response.stop_reason or "end_turn",
             raw_response=response,
             usage=usage,
+        )
+
+    async def _stream_anthropic(
+        self,
+        api_kwargs: dict[str, Any],
+        on_chunk,
+    ) -> ToolCallResponse:
+        """Stream Anthropic API response, calling on_chunk for each text delta."""
+        text_parts: list[str] = []
+        tool_calls: list[ToolCall] = []
+        stop_reason = "end_turn"
+        usage_data = None
+
+        async with self._client.messages.stream(**api_kwargs) as stream:
+            async for event in stream:
+                if event.type == "content_block_delta":
+                    delta = event.delta
+                    if hasattr(delta, "text") and delta.text:
+                        text_parts.append(delta.text)
+                        if on_chunk:
+                            result = on_chunk(delta.text)
+                            if hasattr(result, "__await__"):
+                                await result
+                elif event.type == "message_start":
+                    msg = event.message
+                    if hasattr(msg, "usage") and msg.usage:
+                        usage_data = {
+                            "input_tokens": msg.usage.input_tokens or 0,
+                            "output_tokens": 0,
+                        }
+                elif event.type == "message_delta":
+                    delta = event.delta
+                    if hasattr(delta, "stop_reason") and delta.stop_reason:
+                        stop_reason = delta.stop_reason
+                    usage_event = event.usage if hasattr(event, "usage") else None
+                    if usage_event and usage_data is not None:
+                        usage_data["output_tokens"] = usage_event.output_tokens or 0
+
+            # Get final message for tool calls
+            final_message = await stream.get_final_message()
+            for block in final_message.content:
+                if block.type == "tool_use":
+                    tool_calls.append(ToolCall(
+                        id=block.id,
+                        name=block.name,
+                        input=block.input,
+                    ))
+            if not usage_data and hasattr(final_message, "usage") and final_message.usage:
+                usage_data = {
+                    "input_tokens": final_message.usage.input_tokens or 0,
+                    "output_tokens": final_message.usage.output_tokens or 0,
+                }
+
+        return ToolCallResponse(
+            text="".join(text_parts),
+            tool_calls=tool_calls,
+            stop_reason=stop_reason,
+            raw_response=None,
+            usage=usage_data,
         )
 
 

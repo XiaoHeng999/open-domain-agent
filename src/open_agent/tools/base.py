@@ -120,8 +120,11 @@ class FunctionTool(Tool):
     def safety_checks(self) -> list[str]:
         return self._safety_checks
 
-    async def execute(self, **kwargs: Any) -> str:
-        result = self._handler(**kwargs)
+    async def execute(self, on_progress=None, **kwargs: Any) -> str:
+        handler_kwargs = dict(kwargs)
+        if on_progress:
+            handler_kwargs["_on_progress"] = on_progress
+        result = self._handler(**handler_kwargs)
         if hasattr(result, "__await__"):
             result = await result
         return str(result)
