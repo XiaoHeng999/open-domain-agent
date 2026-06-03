@@ -29,7 +29,7 @@ class MockHITL(HITLApprovalManager):
         super().__init__(interactive=True)
         self._mock_approved = approved
 
-    def approve(self, operation, details=None):
+    async def approve(self, operation, details=None, **kwargs):
         return HITLResult(
             approved=self._mock_approved,
             level=HITLLevel.WRITE,
@@ -40,122 +40,139 @@ class MockHITL(HITLApprovalManager):
 # ── Deny rule tests ──
 
 class TestDenyRules:
-    def test_deny_by_tool_pattern(self):
+    @pytest.mark.asyncio
+    async def test_deny_by_tool_pattern(self):
         guard = _guard(deny=[{"tool": "exec", "pattern": "rm -rf *"}])
-        result = guard.check("exec", {"command": "rm -rf /"})
+        result = await guard.check("exec", {"command": "rm -rf /"})
         assert result.decision == PermissionDecision.DENY
         assert "Denied by rule" in result.reason
 
-    def test_deny_priority_over_allow(self):
+    @pytest.mark.asyncio
+    async def test_deny_priority_over_allow(self):
         guard = _guard(
             deny=[{"tool": "exec", "pattern": "rm *"}],
             allow=[{"tool": "exec", "pattern": "rm *"}],
         )
-        result = guard.check("exec", {"command": "rm something"})
+        result = await guard.check("exec", {"command": "rm something"})
         assert result.decision == PermissionDecision.DENY
 
-    def test_deny_wildcard_tool(self):
+    @pytest.mark.asyncio
+    async def test_deny_wildcard_tool(self):
         guard = _guard(deny=[{"tool": "*", "pattern": "rm -rf *"}])
-        result = guard.check("exec", {"command": "rm -rf /"})
+        result = await guard.check("exec", {"command": "rm -rf /"})
         assert result.decision == PermissionDecision.DENY
 
-    def test_deny_path_glob(self):
+    @pytest.mark.asyncio
+    async def test_deny_path_glob(self):
         guard = _guard(deny=[{"tool": "read_file", "path": "./secrets/**"}])
-        result = guard.check("read_file", {"path": "./secrets/credentials.json"})
+        result = await guard.check("read_file", {"path": "./secrets/credentials.json"})
         assert result.decision == PermissionDecision.DENY
 
-    def test_deny_domain(self):
+    @pytest.mark.asyncio
+    async def test_deny_domain(self):
         guard = _guard(deny=[{"tool": "web_fetch", "domain": "169.254.169.254"}])
-        result = guard.check("web_fetch", {"url": "http://169.254.169.254/latest/meta-data/"})
+        result = await guard.check("web_fetch", {"url": "http://169.254.169.254/latest/meta-data/"})
         assert result.decision == PermissionDecision.DENY
 
-    def test_no_deny_match_passes(self):
+    @pytest.mark.asyncio
+    async def test_no_deny_match_passes(self):
         # Fluent mode, no deny match, no HITL → falls through to ask user → no HITL → deny
         guard = _guard(deny=[{"tool": "exec", "pattern": "rm *"}])
-        result = guard.check("exec", {"command": "git status"})
+        result = await guard.check("exec", {"command": "git status"})
         assert result.decision == PermissionDecision.DENY
         # Unrestricted mode bypasses mode check entirely
         guard2 = _guard(
             mode=PermissionMode.UNRESTRICTED,
             deny=[{"tool": "exec", "pattern": "rm *"}],
         )
-        result2 = guard2.check("exec", {"command": "git status"})
+        result2 = await guard2.check("exec", {"command": "git status"})
         assert result2.decision == PermissionDecision.ALLOW
 
 
 # ── Mode tests ──
 
 class TestModes:
-    def test_cautious_read_only_allowed(self):
+    @pytest.mark.asyncio
+    async def test_cautious_read_only_allowed(self):
         guard = _guard(mode=PermissionMode.CAUTIOUS)
-        result = guard.check("read_file", {"path": "/tmp/test.txt"}, {"read_only": True})
+        result = await guard.check("read_file", {"path": "/tmp/test.txt"}, {"read_only": True})
         assert result.decision == PermissionDecision.ALLOW
 
-    def test_cautious_write_defers_to_hitl(self):
+    @pytest.mark.asyncio
+    async def test_cautious_write_defers_to_hitl(self):
         hitl = MockHITL(approved=True)
         guard = _guard(mode=PermissionMode.CAUTIOUS, hitl=hitl)
-        result = guard.check("write_file", {"path": "/tmp/test.txt"}, {"read_only": False})
+        result = await guard.check("write_file", {"path": "/tmp/test.txt"}, {"read_only": False})
         assert result.decision == PermissionDecision.ALLOW
         assert "Approved by user" in result.reason
 
-    def test_conservative_write_denied(self):
+    @pytest.mark.asyncio
+    async def test_conservative_write_denied(self):
         guard = _guard(mode=PermissionMode.CONSERVATIVE)
-        result = guard.check("write_file", {"path": "/tmp/test.txt"}, {"read_only": False})
+        result = await guard.check("write_file", {"path": "/tmp/test.txt"}, {"read_only": False})
         assert result.decision == PermissionDecision.DENY
         assert "conservative mode" in result.reason.lower()
 
-    def test_conservative_read_allowed(self):
+    @pytest.mark.asyncio
+    async def test_conservative_read_allowed(self):
         guard = _guard(mode=PermissionMode.CONSERVATIVE)
-        result = guard.check("read_file", {"path": "/tmp/test.txt"}, {"read_only": True})
+        result = await guard.check("read_file", {"path": "/tmp/test.txt"}, {"read_only": True})
         assert result.decision == PermissionDecision.ALLOW
 
-    def test_fluent_allow_rule_bypasses_ask(self):
+    @pytest.mark.asyncio
+    async def test_fluent_allow_rule_bypasses_ask(self):
         guard = _guard(
             mode=PermissionMode.FLUENT,
             allow=[{"tool": "exec", "pattern": "pip install *"}],
         )
-        result = guard.check("exec", {"command": "pip install requests"})
+        result = await guard.check("exec", {"command": "pip install requests"})
         assert result.decision == PermissionDecision.ALLOW
         assert "Allowed by rule" in result.reason
 
-    def test_fluent_no_rule_hit_defers_to_ask(self):
+    @pytest.mark.asyncio
+    async def test_fluent_no_rule_hit_defers_to_ask(self):
         hitl = MockHITL(approved=False)
         guard = _guard(mode=PermissionMode.FLUENT, hitl=hitl)
-        result = guard.check("exec", {"command": "curl http://example.com"})
+        result = await guard.check("exec", {"command": "curl http://example.com"})
         assert result.decision == PermissionDecision.DENY
 
-    def test_unrestricted_allows_all(self):
+    @pytest.mark.asyncio
+    async def test_unrestricted_allows_all(self):
         guard = _guard(mode=PermissionMode.UNRESTRICTED)
-        result = guard.check("write_file", {"path": "/tmp/test.txt"}, {"read_only": False})
+        result = await guard.check("write_file", {"path": "/tmp/test.txt"}, {"read_only": False})
         assert result.decision == PermissionDecision.ALLOW
 
 
 # ── HITL tests ──
 
 class TestHITL:
-    def test_user_approves(self):
+    @pytest.mark.asyncio
+    async def test_user_approves(self):
         hitl = MockHITL(approved=True)
         guard = _guard(mode=PermissionMode.FLUENT, hitl=hitl)
-        result = guard.check("exec", {"command": "some command"})
+        result = await guard.check("exec", {"command": "some command"})
         assert result.decision == PermissionDecision.ALLOW
 
-    def test_user_rejects(self):
+    @pytest.mark.asyncio
+    async def test_user_rejects(self):
         hitl = MockHITL(approved=False)
         guard = _guard(mode=PermissionMode.FLUENT, hitl=hitl)
-        result = guard.check("exec", {"command": "some command"})
+        result = await guard.check("exec", {"command": "some command"})
         assert result.decision == PermissionDecision.DENY
 
-    def test_no_hitl_defaults_deny(self):
+    @pytest.mark.asyncio
+    async def test_no_hitl_defaults_deny(self):
         guard = _guard(mode=PermissionMode.FLUENT)
-        result = guard.check("exec", {"command": "some command"})
+        result = await guard.check("exec", {"command": "some command"})
         assert result.decision == PermissionDecision.DENY
         assert "No HITL" in result.reason
 
-    def test_non_interactive_hitl_defaults_deny(self):
+    @pytest.mark.asyncio
+    async def test_non_interactive_hitl_defaults_deny(self):
         hitl = HITLApprovalManager(interactive=False)
         guard = _guard(mode=PermissionMode.FLUENT, hitl=hitl)
         # Use a write-level operation so HITL doesn't auto-approve as READ
-        result = guard.check("write_file", {"path": "/tmp/test.txt", "content": "data"})
+        result = await guard.check("write_file", {"path": "/tmp/test.txt", "content": "data"})
         assert result.decision == PermissionDecision.DENY
 
 

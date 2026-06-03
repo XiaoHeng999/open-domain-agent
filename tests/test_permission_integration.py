@@ -11,12 +11,12 @@ from open_agent.tools.shell import ExecTool
 
 
 class AlwaysApproveHITL(HITLApprovalManager):
-    def approve(self, operation, details=None):
+    async def approve(self, operation, details=None, **kwargs):
         return HITLResult(approved=True, level=HITLLevel.WRITE, approved_by="human")
 
 
 class AlwaysDenyHITL(HITLApprovalManager):
-    def approve(self, operation, details=None):
+    async def approve(self, operation, details=None, **kwargs):
         return HITLResult(approved=False, level=HITLLevel.WRITE, approved_by="blocked")
 
 

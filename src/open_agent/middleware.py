@@ -146,7 +146,7 @@ class PermissionMiddleware(ExecutionMiddleware):
                 # In unrestricted mode, auto-approve risky operations
                 if context.permission_guard._mode != PermissionMode.UNRESTRICTED:
                     from open_agent.safety.permission import PermissionDecision
-                    perm_result = context.permission_guard.check_with_safety(
+                    perm_result = await context.permission_guard.check_with_safety(
                         context.tool_name, context.params,
                         {"read_only": context.tool.read_only},
                         risky_risks,
@@ -158,7 +158,7 @@ class PermissionMiddleware(ExecutionMiddleware):
         if context.permission_guard is not None:
             from open_agent.safety.permission import PermissionDecision
             tool_meta = {"read_only": context.tool.read_only}
-            perm_result = context.permission_guard.check(
+            perm_result = await context.permission_guard.check(
                 context.tool_name, context.params, tool_meta,
             )
             if perm_result.decision == PermissionDecision.DENY:

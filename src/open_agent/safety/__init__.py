@@ -45,11 +45,11 @@ class SafetyManager:
             return SafetyCheckResult(safe=True, risk_level="safe")
         return self.path_restrictor.check_path(path, allow_write=allow_write)
 
-    def approve_operation(self, operation: str, details: dict[str, Any] | None = None) -> HITLResult:
+    async def approve_operation(self, operation: str, details: dict[str, Any] | None = None) -> HITLResult:
         if self.level == "off":
             return HITLResult(approved=True, level=HITLLevel.READ, approved_by="auto")
         if self.level == "permissive":
-            result = self.hitl.approve(operation, details)
+            result = await self.hitl.approve(operation, details)
             if not result.approved and result.level != HITLLevel.DANGEROUS:
                 return HITLResult(
                     approved=True,
@@ -59,4 +59,4 @@ class SafetyManager:
                     reason="Permissive mode auto-approve",
                 )
             return result
-        return self.hitl.approve(operation, details)
+        return await self.hitl.approve(operation, details)

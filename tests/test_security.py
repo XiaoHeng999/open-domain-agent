@@ -125,22 +125,25 @@ class TestWorkspacePath:
 
 
 class TestHITL:
-    def test_read_auto_approved(self):
+    @pytest.mark.asyncio
+    async def test_read_auto_approved(self):
         hitl = HITLApprovalManager(interactive=False)
-        result = hitl.approve("read_file", {"path": "/tmp/test.txt"})
+        result = await hitl.approve("read_file", {"path": "/tmp/test.txt"})
         assert result.approved
         assert result.approved_by == "auto"
         assert result.level == HITLLevel.READ
 
-    def test_write_needs_approval(self):
+    @pytest.mark.asyncio
+    async def test_write_needs_approval(self):
         hitl = HITLApprovalManager(interactive=False)
-        result = hitl.approve("write_file", {"path": "/tmp/test.txt"})
+        result = await hitl.approve("write_file", {"path": "/tmp/test.txt"})
         assert not result.approved  # non-interactive rejects
         assert result.level == HITLLevel.WRITE
 
-    def test_dangerous_blocked(self):
+    @pytest.mark.asyncio
+    async def test_dangerous_blocked(self):
         hitl = HITLApprovalManager(interactive=False)
-        result = hitl.approve("delete_file", {"path": "/tmp/test.txt"})
+        result = await hitl.approve("delete_file", {"path": "/tmp/test.txt"})
         assert not result.approved
         assert result.level == HITLLevel.DANGEROUS
 
@@ -150,25 +153,27 @@ class TestHITL:
         assert hitl.classify_operation("write_file") == HITLLevel.WRITE
         assert hitl.classify_operation("delete_file") == HITLLevel.DANGEROUS
 
-    def test_trust_escalation(self):
+    @pytest.mark.asyncio
+    async def test_trust_escalation(self):
         hitl = HITLApprovalManager(trust_threshold=2, interactive=False)
         hitl._interactive = True
         hitl._ask_human = lambda s, op="", dt=None, **kwargs: True  # type: ignore
 
-        r1 = hitl.approve("write_file", {"path": "/tmp/a"})
+        r1 = await hitl.approve("write_file", {"path": "/tmp/a"})
         assert r1.approved
-        r2 = hitl.approve("write_file", {"path": "/tmp/b"})
+        r2 = await hitl.approve("write_file", {"path": "/tmp/b"})
         assert r2.approved
 
         # After threshold, should auto-approve
         assert hitl._trust_escalated
-        r3 = hitl.approve("write_file", {"path": "/tmp/c"})
+        r3 = await hitl.approve("write_file", {"path": "/tmp/c"})
         assert r3.approved
         assert r3.approved_by == "auto"
 
-    def test_whitelist_path(self):
+    @pytest.mark.asyncio
+    async def test_whitelist_path(self):
         hitl = HITLApprovalManager(interactive=False, whitelist_paths=["/tmp/safe"])
-        result = hitl.approve("write_file", {"path": "/tmp/safe"})
+        result = await hitl.approve("write_file", {"path": "/tmp/safe"})
         assert result.approved
 
 
@@ -183,9 +188,10 @@ class TestSafetyManager:
         assert mgr.check_command("rm -rf /").safe
         assert mgr.check_url("http://127.0.0.1/").safe
 
-    def test_permissive_allows_write(self):
+    @pytest.mark.asyncio
+    async def test_permissive_allows_write(self):
         mgr = SafetyManager(SafetyConfig(safety_level="permissive"))
-        result = mgr.approve_operation("write_file", {"path": "/tmp/test"})
+        result = await mgr.approve_operation("write_file", {"path": "/tmp/test"})
         assert result.approved
 
 

@@ -36,7 +36,7 @@ class PermissionGuard:
         self._allow_rules = config.allow
         self._hitl = hitl
 
-    def check(
+    async def check(
         self,
         tool_name: str,
         params: dict[str, Any],
@@ -71,7 +71,7 @@ class PermissionGuard:
             )
 
         # Stage 4: Ask user via HITL
-        return self._ask_user(tool_name, params)
+        return await self._ask_user(tool_name, params)
 
     @staticmethod
     def _safe_str(value: Any, field_name: str) -> str:
@@ -152,7 +152,7 @@ class PermissionGuard:
             )
         return None
 
-    def _ask_user(
+    async def _ask_user(
         self,
         tool_name: str,
         params: dict[str, Any],
@@ -167,7 +167,7 @@ class PermissionGuard:
 
         operation = f"{tool_name}({', '.join(f'{k}={v!r}' for k, v in params.items())})"
         details = dict(params)
-        hitl_result = self._hitl.approve(operation, details, safety_risks=safety_risks)
+        hitl_result = await self._hitl.approve(operation, details, safety_risks=safety_risks)
 
         if hitl_result.approved:
             return PermissionResult(
@@ -179,7 +179,7 @@ class PermissionGuard:
             reason=f"Rejected by user: {hitl_result.reason or 'user denied'}",
         )
 
-    def check_with_safety(
+    async def check_with_safety(
         self,
         tool_name: str,
         params: dict[str, Any],
@@ -205,4 +205,4 @@ class PermissionGuard:
             )
 
         # For cautious/fluent modes: ask user with safety context
-        return self._ask_user(tool_name, params, safety_risks=safety_risks)
+        return await self._ask_user(tool_name, params, safety_risks=safety_risks)

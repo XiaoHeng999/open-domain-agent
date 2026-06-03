@@ -64,7 +64,7 @@ class HITLApprovalManager:
 
         return HITLLevel.READ
 
-    def approve(
+    async def approve(
         self,
         operation: str,
         details: dict[str, Any] | None = None,
