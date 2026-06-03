@@ -198,6 +198,7 @@ class AgentRuntime(BaseComponent):
         self.react_loop._todo_manager = self._todo_manager
         self.react_loop._staleness_rounds = self.config.memory.todo_staleness_rounds
         self.react_loop._prompt_builder = self.prompt_builder
+        self.react_loop._profile_memory = self._profile_memory
 
         # Hooks — create HookManager and register built-in hooks
         if self.config.hooks.enabled:

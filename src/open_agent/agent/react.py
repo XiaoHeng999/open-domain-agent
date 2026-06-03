@@ -168,6 +168,9 @@ class ReActLoop:
         # Missing slots hint from routing (injected by runtime for non-simple tasks)
         self._missing_slots_hint: str = ""
 
+        # Profile memory — injected by AgentRuntime for feedback loop
+        self._profile_memory: Any = None
+
     # -- public API ----------------------------------------------------------
 
     async def run(
@@ -809,6 +812,12 @@ class ReActLoop:
         if self._missing_slots_hint:
             prompt_context["missing_slots_hint"] = self._missing_slots_hint
 
+        # Inject profile memory (avoidance hints, preferences)
+        if self._profile_memory is not None:
+            profile_text = self._profile_memory.get_injection_text()
+            if profile_text:
+                prompt_context["user_profile"] = profile_text
+
         if self._prompt_builder is not None:
             system_content = self._prompt_builder.build(context=prompt_context)
             # Inject domain system prompt from routing if available
@@ -822,6 +831,9 @@ class ReActLoop:
                 system_content += f"\n\n<resumed_from_step={self._resumed_from_step}>"
         else:
             system_content = "You are a helpful agent using the ReAct framework."
+            # Inject profile text even without PromptBuilder
+            if prompt_context.get("user_profile"):
+                system_content += "\n\n" + prompt_context["user_profile"]
 
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_content},
