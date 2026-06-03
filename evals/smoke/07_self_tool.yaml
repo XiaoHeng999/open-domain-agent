@@ -1,0 +1,4 @@
+name: self_tool
+input: "What tools do you have?"
+expected_tools:
+  - self_inspect

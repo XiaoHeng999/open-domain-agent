@@ -1,0 +1,3 @@
+name: simple_qa
+input: "1+1\u7B49\u4E8E\u51E0\uFF1F"
+expected_outcome: "2"

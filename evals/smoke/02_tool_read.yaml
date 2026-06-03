@@ -1,0 +1,4 @@
+name: tool_read
+input: "Read the contents of /etc/hostname"
+expected_tools:
+  - read_file

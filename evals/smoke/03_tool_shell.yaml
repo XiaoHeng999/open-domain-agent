@@ -1,0 +1,4 @@
+name: tool_shell
+input: "Run ls in /tmp"
+expected_tools:
+  - shell_exec

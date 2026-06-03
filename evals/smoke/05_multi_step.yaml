@@ -1,0 +1,5 @@
+name: multi_step
+input: "Read /etc/hostname and tell me the OS"
+expected_tools:
+  - read_file
+expected_outcome: "OS"

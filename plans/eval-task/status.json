@@ -1,6 +1,6 @@
 {
   "01-fix-streaming-toolcalls-and-deepseek-url": "done",
-  "02-create-evals-smoke-scenarios": "pending",
+  "02-create-evals-smoke-scenarios": "done",
   "03-wire-cli-eval-to-runtime": "pending",
   "04-eval-result-persistence": "pending",
   "05-e2e-live-test-scaffold-deepseek-qa": "pending",

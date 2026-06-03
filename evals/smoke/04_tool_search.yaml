@@ -1,0 +1,4 @@
+name: tool_search
+input: "Search for Python asyncio tutorial"
+expected_tools:
+  - web_search
