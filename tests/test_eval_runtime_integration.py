@@ -10,8 +10,9 @@ import yaml
 
 
 @pytest.fixture
-def tmp_scenarios(tmp_path: Path) -> Path:
+def tmp_scenarios(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Create a temporary evals directory with smoke scenarios."""
+    monkeypatch.chdir(tmp_path)
     smoke = tmp_path / "smoke"
     smoke.mkdir()
     (smoke / "test_scenario.yaml").write_text(yaml.dump({
@@ -27,13 +28,25 @@ def tmp_scenarios(tmp_path: Path) -> Path:
     return tmp_path
 
 
+def _make_mock_runtime(response) -> MagicMock:
+    """Create a mock runtime with proper config for JSON serialization."""
+    mock_runtime = MagicMock()
+    mock_runtime.run = AsyncMock(return_value=response)
+    mock_runtime.on_start = AsyncMock()
+    mock_runtime.on_stop = AsyncMock()
+    mock_runtime.config = MagicMock()
+    mock_runtime.config.model = MagicMock()
+    mock_runtime.config.model.provider = "mock"
+    mock_runtime.config.model.name = "mock-model"
+    return mock_runtime
+
+
 @pytest.mark.asyncio
 async def test_eval_runner_with_mock_runtime(tmp_scenarios: Path) -> None:
     """EvalRunner should execute scenarios through a mock runtime."""
     from open_agent.eval.runner import EvalRunner
     from open_agent.runtime import AgentResponse
 
-    # Mock runtime that returns a fixed response
     mock_response = AgentResponse(
         output="The answer is 2",
         trace_id="test-trace",
@@ -43,20 +56,15 @@ async def test_eval_runner_with_mock_runtime(tmp_scenarios: Path) -> None:
             ],
         },
     )
-    mock_runtime = MagicMock()
-    mock_runtime.run = AsyncMock(return_value=mock_response)
-    mock_runtime.on_start = AsyncMock()
-    mock_runtime.on_stop = AsyncMock()
+    mock_runtime = _make_mock_runtime(mock_response)
 
     runner = EvalRunner(scenarios_dir=tmp_scenarios, runtime=mock_runtime)
     results = await runner.run_suite("smoke")
 
     assert len(results) == 2
-    # test_scenario should pass (expected_outcome "2" in "The answer is 2")
     test_result = next(r for r in results if r["name"] == "test_scenario")
     assert test_result["status"] == "pass"
 
-    # tool_scenario should fail (no read_file tool used in mock)
     tool_result = next(r for r in results if r["name"] == "tool_scenario")
     assert tool_result["status"] == "fail"
 
@@ -80,10 +88,7 @@ async def test_eval_runner_with_tool_calls(tmp_scenarios: Path) -> None:
             ],
         },
     )
-    mock_runtime = MagicMock()
-    mock_runtime.run = AsyncMock(return_value=mock_response)
-    mock_runtime.on_start = AsyncMock()
-    mock_runtime.on_stop = AsyncMock()
+    mock_runtime = _make_mock_runtime(mock_response)
 
     runner = EvalRunner(scenarios_dir=tmp_scenarios, runtime=mock_runtime)
     results = await runner.run_suite("smoke")
@@ -105,6 +110,10 @@ async def test_eval_runner_error_handling(tmp_scenarios: Path) -> None:
     mock_runtime.run = AsyncMock(side_effect=ConnectionError("API unreachable"))
     mock_runtime.on_start = AsyncMock()
     mock_runtime.on_stop = AsyncMock()
+    mock_runtime.config = MagicMock()
+    mock_runtime.config.model = MagicMock()
+    mock_runtime.config.model.provider = "mock"
+    mock_runtime.config.model.name = "mock-model"
 
     runner = EvalRunner(scenarios_dir=tmp_scenarios, runtime=mock_runtime)
     results = await runner.run_suite("smoke")

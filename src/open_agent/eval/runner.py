@@ -1,8 +1,10 @@
 """Eval runner — loads YAML scenarios and executes against AgentRuntime."""
 from __future__ import annotations
 
+import json
 import logging
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -36,7 +38,7 @@ class EvalRunner:
         return scenarios
 
     async def run_suite(self, suite_name: str) -> list[dict[str, Any]]:
-        """Execute all scenarios in a suite and return results."""
+        """Execute all scenarios in a suite, persist results, and return them."""
         scenarios = self.load_suite(suite_name)
         results: list[dict[str, Any]] = []
 
@@ -44,7 +46,43 @@ class EvalRunner:
             result = await self._run_scenario(scenario)
             results.append(result)
 
+        self._save_results(suite_name, results)
+
         return results
+
+    def _save_results(
+        self, suite_name: str, results: list[dict[str, Any]]
+    ) -> None:
+        """Persist eval results to .open_agent/eval_results/."""
+        output_dir = Path(".open_agent") / "eval_results"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        now = datetime.now(timezone.utc)
+        timestamp = now.strftime("%Y%m%dT%H%M%SZ")
+
+        passed = sum(1 for r in results if r["status"] == "pass")
+        failed = len(results) - passed
+
+        model_info: dict[str, str] = {}
+        if self._runtime is not None:
+            try:
+                cfg = self._runtime.config
+                model_info = {"provider": cfg.model.provider, "name": cfg.model.name}
+            except Exception:
+                pass
+
+        report = {
+            "suite": suite_name,
+            "timestamp": now.isoformat(),
+            "model": model_info,
+            "results": results,
+            "summary": {"total": len(results), "passed": passed, "failed": failed},
+        }
+
+        filename = f"{suite_name}_{timestamp}.json"
+        (output_dir / filename).write_text(
+            json.dumps(report, indent=2, ensure_ascii=False)
+        )
 
     async def _run_scenario(self, scenario: dict[str, Any]) -> dict[str, Any]:
         """Run a single scenario and check expectations."""
