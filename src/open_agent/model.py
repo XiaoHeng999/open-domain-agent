@@ -206,6 +206,8 @@ class OpenAIProvider(ModelProvider):
 
         text_parts: list[str] = []
         usage_data = None
+        # Aggregate streaming tool_call deltas by index
+        tc_accum: dict[int, dict[str, Any]] = {}
 
         async for chunk in chunks:
             if not chunk.choices:
@@ -217,6 +219,19 @@ class OpenAIProvider(ModelProvider):
                     result = on_chunk(delta.content)
                     if hasattr(result, "__await__"):
                         await result
+            # Collect tool_call deltas
+            if hasattr(delta, "tool_calls") and delta.tool_calls:
+                for tc_delta in delta.tool_calls:
+                    idx = tc_delta.index
+                    if idx not in tc_accum:
+                        tc_accum[idx] = {"id": "", "name": "", "arguments": ""}
+                    entry = tc_accum[idx]
+                    if tc_delta.id:
+                        entry["id"] = tc_delta.id
+                    if tc_delta.function.name:
+                        entry["name"] = tc_delta.function.name
+                    if tc_delta.function.arguments:
+                        entry["arguments"] += tc_delta.function.arguments
             # Check for usage in final chunk
             if hasattr(chunk, "usage") and chunk.usage:
                 usage_data = {
@@ -224,10 +239,25 @@ class OpenAIProvider(ModelProvider):
                     "output_tokens": chunk.usage.completion_tokens or 0,
                 }
 
+        tool_calls: list[ToolCall] = []
+        for idx in sorted(tc_accum):
+            entry = tc_accum[idx]
+            try:
+                args = json.loads(entry["arguments"]) if entry["arguments"] else {}
+            except json.JSONDecodeError:
+                args = {}
+            tool_calls.append(ToolCall(
+                id=entry["id"],
+                name=entry["name"],
+                input=args,
+            ))
+
+        stop_reason = "tool_use" if tool_calls else "end_turn"
+
         return ToolCallResponse(
             text="".join(text_parts),
-            tool_calls=[],
-            stop_reason="end_turn",
+            tool_calls=tool_calls,
+            stop_reason=stop_reason,
             raw_response=None,
             usage=usage_data,
         )
@@ -427,7 +457,7 @@ class DeepSeekProvider(OpenAIProvider):
 
     def __init__(self, config: ModelConfig) -> None:
         if not config.base_url:
-            config = config.model_copy(update={"base_url": "https://api.deepseek.com"})
+            config = config.model_copy(update={"base_url": "https://api.deepseek.com/v1"})
         super().__init__(config)
 
 
