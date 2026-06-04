@@ -1,0 +1,12 @@
+{
+  "01-trace-persistence": "doing",
+  "02-cli-verbose-debug": "pending",
+  "03-memory-spans": "pending",
+  "04-recovery-spans": "pending",
+  "05-eval-path-b": "pending",
+  "06-llmjudge-fix": "pending",
+  "07-metrics-trajectory": "pending",
+  "08-monitoring-cleanup": "pending",
+  "09-ci-trend-replay": "pending",
+  "10-eval-spans": "pending"
+}

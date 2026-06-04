@@ -259,6 +259,8 @@ def _apply_env_overrides(data: dict[str, Any]) -> None:
         "OPEN_AGENT_WORKSPACE": ("workspace",),
         "OPEN_AGENT_SANDBOX_BACKEND": ("sandbox", "backend"),
         "OPEN_AGENT_PERMISSION_MODE": ("permissions", "mode"),
+        "OPEN_AGENT_TRACE_DIR": ("trace", "trace_dir"),
+        "OPEN_AGENT_STORE_TRACES": ("trace", "store_traces"),
     }
     for env_key, path_parts in env_map.items():
         val = os.environ.get(env_key)

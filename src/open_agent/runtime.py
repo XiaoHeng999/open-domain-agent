@@ -61,7 +61,7 @@ class AgentRuntime(BaseComponent):
         self.config = config or AgentConfig()
 
         # Core infrastructure
-        self.trace_manager = TraceManager()
+        self.trace_manager = TraceManager(trace_dir=self.config.trace.trace_dir)
         self.tool_registry = ToolRegistry()
         self.skill_registry = SkillRegistry()
 
@@ -338,6 +338,14 @@ class AgentRuntime(BaseComponent):
 
     async def on_stop(self) -> None:
         """Clean up all subsystems."""
+        # Persist traces before shutdown
+        if self.config.trace.store_traces:
+            self.trace_manager._trace_dir = self.config.trace.trace_dir
+            try:
+                await self.trace_manager.persist_all_traces()
+            except Exception:
+                pass
+
         # Cascading stop: terminate all active sub-agents
         if self._subagent_manager:
             await self._subagent_manager.stop_all()

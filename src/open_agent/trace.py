@@ -8,6 +8,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 
@@ -120,8 +121,9 @@ class Trace:
 class TraceManager:
     """Central trace manager — stores traces by trace_id."""
 
-    def __init__(self) -> None:
+    def __init__(self, trace_dir: str = ".open_agent/traces") -> None:
         self._traces: dict[str, Trace] = {}
+        self._trace_dir = trace_dir
 
     def create_trace(self, metadata: dict[str, Any] | None = None) -> Trace:
         trace = Trace(metadata=metadata or {})
@@ -133,6 +135,60 @@ class TraceManager:
 
     def list_traces(self) -> list[str]:
         return list(self._traces.keys())
+
+    async def persist_trace(self, trace_id: str) -> None:
+        """Persist a single trace to disk as JSON."""
+        trace = self._traces.get(trace_id)
+        if trace is None:
+            return
+        try:
+            path = Path(self._trace_dir)
+            path.mkdir(parents=True, exist_ok=True)
+            (path / f"{trace_id}.json").write_text(trace.to_json())
+        except Exception:
+            pass
+
+    async def persist_all_traces(self) -> None:
+        """Persist all in-memory traces to disk."""
+        for trace_id in list(self._traces.keys()):
+            await self.persist_trace(trace_id)
+
+    def load_trace(self, trace_id: str) -> Trace | None:
+        """Load a trace from disk by trace_id."""
+        path = Path(self._trace_dir) / f"{trace_id}.json"
+        if not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text())
+            trace = Trace(
+                trace_id=data["trace_id"],
+                metadata=data.get("metadata", {}),
+            )
+            for span_data in data.get("spans", []):
+                span = Span(
+                    span_id=span_data["span_id"],
+                    parent_id=span_data.get("parent_id"),
+                    operation=span_data["operation"],
+                    kind=SpanKind(span_data["kind"]),
+                    status=SpanStatus(span_data["status"]),
+                    start_time=span_data["start_time"],
+                    end_time=span_data.get("end_time"),
+                    error_message=span_data.get("error_message"),
+                    attributes=span_data.get("attributes", {}),
+                )
+                trace.spans.append(span)
+            return trace
+        except Exception:
+            return None
+
+    def list_persisted_traces(self) -> list[str]:
+        """List all trace IDs persisted on disk."""
+        path = Path(self._trace_dir)
+        if not path.exists():
+            return []
+        return sorted(
+            p.stem for p in path.glob("*.json")
+        )
 
 
 def setup_structured_logging(level: int = logging.INFO) -> logging.Logger:
