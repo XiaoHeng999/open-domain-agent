@@ -23,9 +23,14 @@ def tmp_scenarios(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
+def _load_jsonl(path: Path) -> list[dict]:
+    """Read all lines from a JSONL file."""
+    return [json.loads(line) for line in path.read_text().strip().splitlines()]
+
+
 @pytest.mark.asyncio
-async def test_save_results_creates_file(tmp_scenarios: Path) -> None:
-    """run_suite should create a JSON file in .open_agent/eval_results/."""
+async def test_save_results_creates_jsonl(tmp_scenarios: Path) -> None:
+    """run_suite should append to .open_agent/eval_results/{suite}.jsonl."""
     from open_agent.eval.runner import EvalRunner
 
     mock_runtime = MagicMock()
@@ -44,10 +49,12 @@ async def test_save_results_creates_file(tmp_scenarios: Path) -> None:
 
     output_dir = tmp_scenarios / ".open_agent" / "eval_results"
     assert output_dir.exists()
-    files = list(output_dir.glob("smoke_*.json"))
-    assert len(files) == 1
+    jsonl = output_dir / "smoke.jsonl"
+    assert jsonl.exists()
 
-    data = json.loads(files[0].read_text())
+    entries = _load_jsonl(jsonl)
+    assert len(entries) == 1
+    data = entries[0]
     assert data["suite"] == "smoke"
     assert "timestamp" in data
     assert "model" in data
@@ -77,8 +84,8 @@ async def test_save_results_json_structure(tmp_scenarios: Path) -> None:
     await runner.run_suite("smoke")
 
     output_dir = tmp_scenarios / ".open_agent" / "eval_results"
-    files = list(output_dir.glob("smoke_*.json"))
-    data = json.loads(files[0].read_text())
+    entries = _load_jsonl(output_dir / "smoke.jsonl")
+    data = entries[0]
 
     assert data["suite"] == "smoke"
     assert data["model"]["provider"] == "openai"
@@ -91,8 +98,8 @@ async def test_save_results_json_structure(tmp_scenarios: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_multiple_runs_produce_different_files(tmp_scenarios: Path) -> None:
-    """Multiple run_suite calls should produce separate files with different timestamps."""
+async def test_multiple_runs_append_to_jsonl(tmp_scenarios: Path) -> None:
+    """Multiple run_suite calls should append lines to the same JSONL."""
     import time
 
     from open_agent.eval.runner import EvalRunner
@@ -108,15 +115,14 @@ async def test_multiple_runs_produce_different_files(tmp_scenarios: Path) -> Non
 
     runner = EvalRunner(scenarios_dir=tmp_scenarios, runtime=mock_runtime)
     await runner.run_suite("smoke")
-    # Ensure different second timestamp
     time.sleep(1.1)
     await runner.run_suite("smoke")
 
     output_dir = tmp_scenarios / ".open_agent" / "eval_results"
-    files = sorted(output_dir.glob("smoke_*.json"))
-    assert len(files) == 2
-    # Different filenames (different timestamps)
-    assert files[0].name != files[1].name
+    entries = _load_jsonl(output_dir / "smoke.jsonl")
+    assert len(entries) == 2
+    # Different timestamps
+    assert entries[0]["timestamp"] != entries[1]["timestamp"]
 
 
 @pytest.mark.asyncio
@@ -131,5 +137,7 @@ async def test_save_results_creates_directory(tmp_scenarios: Path) -> None:
 
     output_dir = tmp_scenarios / ".open_agent" / "eval_results"
     assert output_dir.exists()
-    files = list(output_dir.glob("test_*.json"))
-    assert len(files) == 1
+    jsonl = output_dir / "test.jsonl"
+    assert jsonl.exists()
+    entries = _load_jsonl(jsonl)
+    assert len(entries) == 1

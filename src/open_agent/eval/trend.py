@@ -26,13 +26,34 @@ def load_eval_results(
     results_dir: Path | str = ".open_agent/eval_results",
     latest: int = 2,
 ) -> list[dict[str, Any]]:
-    """Load the latest N eval result JSON files for a suite."""
+    """Load the latest N eval results for a suite.
+
+    Prefers JSONL ({suite}.jsonl) when available, falling back to
+    legacy per-file format ({suite}_*.json).
+    """
     results_dir = Path(results_dir)
     if not results_dir.exists():
         return []
 
+    # Try JSONL first
+    jsonl_path = results_dir / f"{suite}.jsonl"
+    if jsonl_path.exists():
+        entries: list[dict[str, Any]] = []
+        for line in jsonl_path.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entries.append(json.loads(line))
+            except Exception:
+                continue
+        # Sort by timestamp descending, take latest N
+        entries.sort(key=lambda e: e.get("timestamp", ""), reverse=True)
+        return entries[:latest]
+
+    # Fallback: legacy per-file format
     files = sorted(results_dir.glob(f"{suite}_*.json"), reverse=True)
-    loaded = []
+    loaded: list[dict[str, Any]] = []
     for f in files[:latest]:
         try:
             loaded.append(json.loads(f.read_text()))

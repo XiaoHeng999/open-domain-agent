@@ -18,6 +18,17 @@ from open_agent.trace import SpanKind
 logger = logging.getLogger("open_agent.eval")
 
 
+def _enforce_retention(path: Path, max_retention: int) -> None:
+    """Keep only the last *max_retention* lines in a JSONL file."""
+    if not path.exists():
+        return
+    lines = path.read_text().splitlines()
+    if len(lines) <= max_retention:
+        return
+    kept = lines[-max_retention:]
+    path.write_text("\n".join(kept) + "\n")
+
+
 class EvalRunner:
     """Loads YAML test scenarios and executes them against AgentRuntime."""
 
@@ -107,7 +118,6 @@ class EvalRunner:
         output_dir.mkdir(parents=True, exist_ok=True)
 
         now = datetime.now(timezone.utc)
-        timestamp = now.strftime("%Y%m%dT%H%M%SZ")
 
         passed = sum(1 for r in results if r["status"] == "pass")
         failed = len(results) - passed
@@ -135,10 +145,21 @@ class EvalRunner:
             "summary": {"total": len(results), "passed": passed, "failed": failed},
         }
 
-        filename = f"{suite_name}_{timestamp}.json"
-        (output_dir / filename).write_text(
-            json.dumps(report, indent=2, ensure_ascii=False)
-        )
+        # Append to JSONL
+        jsonl_path = output_dir / f"{suite_name}.jsonl"
+        with open(jsonl_path, "a") as f:
+            f.write(json.dumps(report, ensure_ascii=False) + "\n")
+
+        # Enforce retention
+        retention = 100
+        if self._runtime is not None:
+            try:
+                val = self._runtime.config.eval.results_retention
+                if isinstance(val, int):
+                    retention = val
+            except Exception:
+                pass
+        _enforce_retention(jsonl_path, retention)
 
         # Persist trajectories
         self._save_trajectories(output_dir, results)
