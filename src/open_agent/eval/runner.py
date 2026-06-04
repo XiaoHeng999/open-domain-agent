@@ -11,6 +11,7 @@ import yaml
 
 from open_agent.eval.replay import TraceReplayEngine
 from open_agent.eval.scenario import Scenario, StepAssertion
+from open_agent.eval.judge import LLMJudge
 from open_agent.trace import SpanKind
 
 logger = logging.getLogger("open_agent.eval")
@@ -27,6 +28,7 @@ class EvalRunner:
         self._scenarios_dir = Path(scenarios_dir) if scenarios_dir else Path("evals")
         self._runtime = runtime
         self._replay_engine = TraceReplayEngine()
+        self._judge = LLMJudge()
 
     def load_suite(self, suite_name: str) -> list[dict[str, Any]]:
         """Load all YAML scenarios from a suite directory."""
@@ -192,6 +194,10 @@ class EvalRunner:
             if not checks:
                 checks.append({"type": "no_expectations", "passed": True})
 
+            # Run LLMJudge for quality scoring
+            expected_desc = scenario.get("expected_outcome", scenario_obj.expected_output)
+            judge_score = self._judge._rule_based_judge(response.output, expected_desc)
+
             return {
                 "name": scenario["name"],
                 "status": status,
@@ -199,6 +205,8 @@ class EvalRunner:
                 "output": response.output,
                 "tool_call_accuracy": replay_result.tool_call_accuracy,
                 "assertion_pass_rate": replay_result.assertion_pass_rate,
+                "quality_score": judge_score.score,
+                "quality_reasoning": judge_score.reasoning,
             }
 
         # Fallback: no trace available, use basic substring matching

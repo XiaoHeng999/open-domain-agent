@@ -55,12 +55,49 @@ class LLMJudge:
             return self._rule_based_judge(actual_output, expected_description)
 
     def _rule_based_judge(self, actual: str, expected: str) -> JudgeScore:
-        """Fallback rule-based scoring."""
-        score = 3  # neutral default
-        if actual.strip() and len(actual) > 10:
-            score = 4
-        if expected.lower() in actual.lower():
-            score = 5
-        if not actual.strip():
-            score = 1
-        return JudgeScore(score=float(score), reasoning="Rule-based scoring", criteria="")
+        """Multi-signal progressive scoring with 6 levels."""
+        stripped = actual.strip()
+
+        # Level 1: Empty or whitespace
+        if not stripped:
+            return JudgeScore(score=1.0, reasoning="Empty output", criteria="")
+
+        # Level 2: Very short output (< 20 chars)
+        if len(stripped) < 20:
+            return JudgeScore(score=2.0, reasoning="Output too short (< 20 chars)", criteria="")
+
+        # Check expected content match
+        expected_lower = expected.lower().strip()
+        actual_lower = stripped.lower()
+
+        if expected_lower:
+            # Split expected into keywords
+            expected_words = set(expected_lower.split())
+            matched = sum(1 for w in expected_words if w in actual_lower)
+            match_ratio = matched / max(len(expected_words), 1)
+
+            # Level 2.5: No expected content found
+            if match_ratio == 0:
+                return JudgeScore(score=2.5, reasoning="Expected content not found in output", criteria="")
+
+            # Level 3: Partial match
+            if match_ratio < 1.0:
+                return JudgeScore(
+                    score=3.0,
+                    reasoning=f"Partial match ({match_ratio:.0%} of expected keywords)",
+                    criteria="",
+                )
+
+            # Level 4: Full match
+            # Level 4.5-5.0: Full match + structural quality
+            has_structure = any(marker in stripped for marker in ["\n", "1.", "- ", "* ", "```"])
+            if has_structure and len(stripped) > 50:
+                return JudgeScore(score=4.5, reasoning="Full match with structured output", criteria="")
+
+            return JudgeScore(score=4.0, reasoning="Expected content fully matched", criteria="")
+
+        # No expected content — score based on output quality alone
+        if len(stripped) > 50:
+            return JudgeScore(score=3.0, reasoning="Substantial output, no expected content to match", criteria="")
+
+        return JudgeScore(score=2.5, reasoning="Short output with no expected content", criteria="")
