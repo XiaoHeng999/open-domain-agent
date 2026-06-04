@@ -57,6 +57,7 @@ async def test_eval_runner_reports_pass(tmp_path: Path) -> None:
 
     mock_response = MagicMock()
     mock_response.output = "Python is a programming language"
+    mock_response.trace_id = "test-trace-001"
     mock_response.metadata = {
         "steps": [{"action": "web_search({})"}],
     }
@@ -90,6 +91,7 @@ async def test_eval_runner_reports_fail(tmp_path: Path) -> None:
 
     mock_response = MagicMock()
     mock_response.output = "I don't know"
+    mock_response.trace_id = "test-trace-002"
     mock_response.metadata = {
         "steps": [],
     }
@@ -138,6 +140,7 @@ async def test_eval_runner_checks_outcome(tmp_path: Path) -> None:
 
     mock_response = MagicMock()
     mock_response.output = "The answer is 4"
+    mock_response.trace_id = "test-trace-003"
     mock_response.metadata = {"steps": []}
 
     with patch.object(runner, "_execute_scenario", new_callable=AsyncMock, return_value=mock_response):
@@ -163,6 +166,7 @@ async def test_eval_runner_outcome_mismatch(tmp_path: Path) -> None:
 
     mock_response = MagicMock()
     mock_response.output = "The answer is 4"
+    mock_response.trace_id = "test-trace-004"
     mock_response.metadata = {"steps": []}
 
     with patch.object(runner, "_execute_scenario", new_callable=AsyncMock, return_value=mock_response):

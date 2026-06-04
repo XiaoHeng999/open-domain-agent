@@ -262,6 +262,134 @@ def eval_cmd(
     console.print(f"\n[bold]Summary:[/] {passed} passed, {failed} failed, {len(results)} total")
 
 
+@app.command(name="eval-replay")
+def eval_replay(
+    trajectory: str = typer.Option(..., "--trajectory", "-t", help="Trajectory JSON file path"),
+    scenario: str = typer.Option(..., "--scenario", "-s", help="Scenario YAML file path"),
+) -> None:
+    """Replay a saved trajectory against a scenario (offline, no LLM)."""
+    from open_agent.eval.replay import TraceReplayEngine
+    from open_agent.eval.scenario import Scenario
+    from open_agent.trace import Trace
+
+    traj_path = Path(trajectory)
+    scen_path = Path(scenario)
+
+    if not traj_path.exists():
+        console.print(f"[red]Trajectory not found: {traj_path}[/red]")
+        raise typer.Exit(1)
+    if not scen_path.exists():
+        console.print(f"[red]Scenario not found: {scen_path}[/red]")
+        raise typer.Exit(1)
+
+    # Load trajectory as Trace
+    try:
+        from open_agent.trace import Span, SpanKind, SpanStatus
+
+        data = json.loads(traj_path.read_text())
+        trace = Trace(trace_id=data.get("trace_id", "replay"), metadata=data.get("metadata", {}))
+        for span_data in data.get("spans", []):
+            kind = SpanKind(span_data.get("kind", "internal"))
+            span = Span(
+                operation=span_data.get("operation", ""),
+                kind=kind,
+                status=SpanStatus(span_data.get("status", "ok")),
+            )
+            for k, v in span_data.get("attributes", {}).items():
+                span.set_attribute(k, v)
+            if span_data.get("duration_ms"):
+                span.end_time = span.start_time + span_data["duration_ms"] / 1000
+            span.error_message = span_data.get("error_message")
+            trace.spans.append(span)
+    except Exception as exc:
+        console.print(f"[red]Failed to load trajectory: {exc}[/red]")
+        raise typer.Exit(1)
+
+    # Load scenario
+    import yaml
+
+    try:
+        scen_data = yaml.safe_load(scen_path.read_text())
+        if scen_data is None:
+            scen_data = {}
+        name = scen_data.get("name", scen_path.stem)
+        expected_tools = scen_data.get("expected_tools", [])
+        assertions = []
+        from open_agent.eval.scenario import StepAssertion
+
+        for a in scen_data.get("assertions", []):
+            assertions.append(StepAssertion(
+                step=a.get("step", 0),
+                type=a.get("type", "tool_called"),
+                tool=a.get("tool"),
+                expected_value=a.get("expected"),
+            ))
+        scen = Scenario(name=name, input=scen_data.get("input", ""), expected_tool_calls=expected_tools, step_assertions=assertions)
+    except Exception as exc:
+        console.print(f"[red]Failed to load scenario: {exc}[/red]")
+        raise typer.Exit(1)
+
+    engine = TraceReplayEngine()
+    result = engine.replay(trace, scen)
+
+    status = "pass" if result.passed else "FAIL"
+    style = "green" if result.passed else "red"
+    console.print(f"[{style}]{status}[/] — {result.scenario_name}")
+    console.print(f"  Tool accuracy: {result.tool_call_accuracy:.0%}")
+    console.print(f"  Assertion pass rate: {result.assertion_pass_rate:.0%}")
+    console.print(f"  Steps: {len(result.step_comparisons)}")
+
+    if result.step_comparisons:
+        table = Table(title="Step Details")
+        table.add_column("Step", style="cyan")
+        table.add_column("Expected")
+        table.add_column("Actual")
+        table.add_column("Match")
+        for sc in result.step_comparisons:
+            match_str = "ok" if sc.match else "MISS"
+            table.add_row(str(sc.step_number), sc.expected_tool or "-", sc.actual_tool or "-", match_str)
+        console.print(table)
+
+
+@app.command(name="eval-trend")
+def eval_trend(
+    suite: str = typer.Option("smoke", "--suite", "-s", help="Eval suite name"),
+    results_dir: str = typer.Option(".open_agent/eval_results", "--dir", "-d", help="Results directory"),
+) -> None:
+    """Compare latest two eval runs for regressions."""
+    from open_agent.eval.trend import compare_trends, load_eval_results
+
+    loaded = load_eval_results(suite, results_dir)
+    if len(loaded) < 2:
+        console.print("[yellow]Need at least 2 eval runs to compare trends.[/yellow]")
+        raise typer.Exit(0)
+
+    cmp = compare_trends(loaded)
+    if cmp is None:
+        console.print("[yellow]Could not compare runs.[/yellow]")
+        raise typer.Exit(1)
+
+    # Delta indicators
+    pr_arrow = "up" if cmp.pass_rate_delta > 0 else "down" if cmp.pass_rate_delta < 0 else "flat"
+    ta_arrow = "up" if cmp.tool_accuracy_delta > 0 else "down" if cmp.tool_accuracy_delta < 0 else "flat"
+
+    console.print(f"[bold]Pass rate:[/] {cmp.previous_pass_rate:.0%} -> {cmp.current_pass_rate:.0%} ({pr_arrow} {cmp.pass_rate_delta:+.0%})")
+    console.print(f"[bold]Tool accuracy:[/] {cmp.previous_tool_accuracy:.0%} -> {cmp.current_tool_accuracy:.0%} ({ta_arrow} {cmp.tool_accuracy_delta:+.0%})")
+
+    if cmp.regressions:
+        console.print(f"\n[red]Regressions ({len(cmp.regressions)}):[/]")
+        for r in cmp.regressions:
+            console.print(f"  - {r}")
+
+    if cmp.improvements:
+        console.print(f"\n[green]Improvements ({len(cmp.improvements)}):[/]")
+        for i in cmp.improvements:
+            console.print(f"  + {i}")
+
+    if not cmp.regressions and not cmp.improvements:
+        console.print("\n[dim]No scenario-level changes.[/dim]")
+
+
 @app.command()
 def trace(
     trace_id: str = typer.Argument(..., help="Trace ID to inspect"),

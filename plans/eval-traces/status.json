@@ -7,6 +7,6 @@
   "06-llmjudge-fix": "done",
   "07-metrics-trajectory": "done",
   "08-monitoring-cleanup": "done",
-  "09-ci-trend-replay": "pending",
+  "09-ci-trend-replay": "done",
   "10-eval-spans": "done"
 }
