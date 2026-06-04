@@ -3,5 +3,5 @@
   "02-config-retention-foundation": "done",
   "03-eval-results-jsonl": "done",
   "04-eval-trajectories-jsonl": "pending",
-  "05-trace-jsonl": "pending"
+  "05-trace-jsonl": "doing"
 }

@@ -10,6 +10,7 @@ from typing import Optional
 
 import typer
 from prompt_toolkit import prompt as _ptk_prompt
+from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.shortcuts import PromptSession
 from rich.console import Console
 from rich.panel import Panel
@@ -111,7 +112,7 @@ def chat(
             while True:
                 try:
                     user_input = (await session.prompt_async(
-                        "\033[1;36myour prompt:\033[0m ",
+                        HTML("<ansigreen><b>User:</b></ansigreen> "),
                     )).strip()
                 except (KeyboardInterrupt, EOFError):
                     break
@@ -396,12 +397,14 @@ def trace(
     trace_dir: str = typer.Option(".open_agent/traces", "--dir", "-d", help="Trace directory"),
 ) -> None:
     """View execution trace."""
-    trace_path = Path(trace_dir) / f"{trace_id}.json"
-    if not trace_path.exists():
+    from open_agent.trace import TraceManager
+    mgr = TraceManager(trace_dir=trace_dir)
+    loaded = mgr.load_trace(trace_id)
+    if loaded is None:
         console.print(f"[red]Trace not found: {trace_id}[/red]")
         raise typer.Exit(1)
 
-    data = json.loads(trace_path.read_text())
+    data = loaded.to_dict()
     console.print(Panel(json.dumps(data, indent=2, ensure_ascii=False), title=f"Trace: {trace_id}"))
 
 

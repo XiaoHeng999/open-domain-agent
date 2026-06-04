@@ -1,7 +1,7 @@
 """Tests for trace persistence: persist, load, list, auto-mkdir, and env var overrides."""
-
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import tempfile
@@ -27,16 +27,23 @@ def manager(trace_dir):
     return TraceManager(trace_dir=trace_dir)
 
 
+def _load_jsonl(path: Path) -> list[dict]:
+    return [json.loads(line) for line in path.read_text().strip().splitlines() if line.strip()]
+
+
 class TestPersistTrace:
-    async def test_persist_creates_json_file(self, manager, trace_dir):
+    async def test_persist_appends_to_jsonl(self, manager, trace_dir):
         trace = manager.create_trace(metadata={"user_input": "hello"})
         span = trace.create_span("routing", kind=SpanKind.ROUTING)
         span.finish()
 
         await manager.persist_trace(trace.trace_id)
 
-        path = Path(trace_dir) / f"{trace.trace_id}.json"
-        assert path.exists()
+        jsonl = Path(trace_dir) / "traces.jsonl"
+        assert jsonl.exists()
+        entries = _load_jsonl(jsonl)
+        assert len(entries) == 1
+        assert entries[0]["trace_id"] == trace.trace_id
 
     async def test_persist_load_roundtrip(self, manager):
         trace = manager.create_trace(metadata={"user_input": "test"})
@@ -59,7 +66,7 @@ class TestPersistTrace:
         trace = mgr.create_trace()
         await mgr.persist_trace(trace.trace_id)
         assert Path(nested).exists()
-        assert (Path(nested) / f"{trace.trace_id}.json").exists()
+        assert (Path(nested) / "traces.jsonl").exists()
 
 
 class TestLoadTrace:
@@ -72,13 +79,25 @@ class TestLoadTrace:
         span = trace.create_span("test_op", kind=SpanKind.INTERNAL)
         span.finish()
 
-        # Manually write to simulate persisted file
-        path = Path(manager._trace_dir) / f"{trace.trace_id}.json"
-        path.write_text(trace.to_json())
+        # Write to JSONL
+        jsonl_path = Path(manager._trace_dir) / "traces.jsonl"
+        line = json.dumps(trace.to_dict(), ensure_ascii=False)
+        jsonl_path.write_text(line + "\n")
 
         loaded = manager.load_trace(trace.trace_id)
         assert loaded is not None
         assert loaded.metadata["key"] == "value"
+
+    def test_load_fallback_to_legacy_json(self, manager):
+        """load_trace should fall back to old {trace_id}.json files."""
+        path = Path(manager._trace_dir) / "legacy_id.json"
+        data = {"trace_id": "legacy_id", "metadata": {"old": True}, "spans": []}
+        path.write_text(json.dumps(data))
+
+        loaded = manager.load_trace("legacy_id")
+        assert loaded is not None
+        assert loaded.trace_id == "legacy_id"
+        assert loaded.metadata["old"] is True
 
 
 class TestListPersistedTraces:
@@ -95,10 +114,18 @@ class TestListPersistedTraces:
         ids = manager.list_persisted_traces()
         assert set(ids) == {t1.trace_id, t2.trace_id}
 
+    def test_list_includes_legacy_json_files(self, manager, trace_dir):
+        """list_persisted_traces should include old *.json stems."""
+        (Path(trace_dir) / "abc123.json").write_text('{"trace_id": "abc123"}')
+        (Path(trace_dir) / "def456.json").write_text('{"trace_id": "def456"}')
+
+        ids = manager.list_persisted_traces()
+        assert "abc123" in ids
+        assert "def456" in ids
+
 
 class TestPersistAllInOnStop:
     async def test_persist_all_traces_on_stop(self, trace_dir):
-        # Test the persist_all_traces path directly via TraceManager
         mgr = TraceManager(trace_dir=trace_dir)
         t1 = mgr.create_trace(metadata={"test": 1})
         t2 = mgr.create_trace(metadata={"test": 2})
@@ -115,7 +142,6 @@ class TestPersistFailureGraceful:
     async def test_persist_failure_does_not_raise(self, trace_dir):
         mgr = TraceManager(trace_dir="/nonexistent/path/that/cannot/be/created/xyz")
         trace = mgr.create_trace()
-        # Should not raise, even though path is invalid
         await mgr.persist_trace(trace.trace_id)
 
 

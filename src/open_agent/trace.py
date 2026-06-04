@@ -118,6 +118,17 @@ class Trace:
         return json.dumps(self.to_dict(), indent=2, ensure_ascii=False)
 
 
+def _enforce_trace_retention(path: Path, max_retention: int) -> None:
+    """Keep only the last *max_retention* lines in a trace JSONL file."""
+    if not path.exists():
+        return
+    lines = path.read_text().splitlines()
+    if len(lines) <= max_retention:
+        return
+    kept = lines[-max_retention:]
+    path.write_text("\n".join(kept) + "\n")
+
+
 class TraceManager:
     """Central trace manager — stores traces by trace_id."""
 
@@ -137,14 +148,17 @@ class TraceManager:
         return list(self._traces.keys())
 
     async def persist_trace(self, trace_id: str) -> None:
-        """Persist a single trace to disk as JSON."""
+        """Persist a single trace to disk, appending to traces.jsonl."""
         trace = self._traces.get(trace_id)
         if trace is None:
             return
         try:
             path = Path(self._trace_dir)
             path.mkdir(parents=True, exist_ok=True)
-            (path / f"{trace_id}.json").write_text(trace.to_json())
+            jsonl_path = path / "traces.jsonl"
+            line = json.dumps(trace.to_dict(), ensure_ascii=False)
+            with open(jsonl_path, "a") as f:
+                f.write(line + "\n")
         except Exception:
             pass
 
@@ -152,43 +166,100 @@ class TraceManager:
         """Persist all in-memory traces to disk."""
         for trace_id in list(self._traces.keys()):
             await self.persist_trace(trace_id)
+        # Enforce retention after bulk persist
+        try:
+            from open_agent.config import load_config
+            cfg = load_config()
+            retention = cfg.trace.trace_retention
+            if isinstance(retention, int):
+                _enforce_trace_retention(Path(self._trace_dir) / "traces.jsonl", retention)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _parse_trace_dict(data: dict[str, Any]) -> Trace:
+        """Parse a trace dict into a Trace object."""
+        trace = Trace(
+            trace_id=data["trace_id"],
+            metadata=data.get("metadata", {}),
+        )
+        for span_data in data.get("spans", []):
+            span = Span(
+                span_id=span_data["span_id"],
+                parent_id=span_data.get("parent_id"),
+                operation=span_data["operation"],
+                kind=SpanKind(span_data["kind"]),
+                status=SpanStatus(span_data["status"]),
+                start_time=span_data["start_time"],
+                end_time=span_data.get("end_time"),
+                error_message=span_data.get("error_message"),
+                attributes=span_data.get("attributes", {}),
+            )
+            trace.spans.append(span)
+        return trace
 
     def load_trace(self, trace_id: str) -> Trace | None:
-        """Load a trace from disk by trace_id."""
-        path = Path(self._trace_dir) / f"{trace_id}.json"
-        if not path.exists():
-            return None
-        try:
-            data = json.loads(path.read_text())
-            trace = Trace(
-                trace_id=data["trace_id"],
-                metadata=data.get("metadata", {}),
-            )
-            for span_data in data.get("spans", []):
-                span = Span(
-                    span_id=span_data["span_id"],
-                    parent_id=span_data.get("parent_id"),
-                    operation=span_data["operation"],
-                    kind=SpanKind(span_data["kind"]),
-                    status=SpanStatus(span_data["status"]),
-                    start_time=span_data["start_time"],
-                    end_time=span_data.get("end_time"),
-                    error_message=span_data.get("error_message"),
-                    attributes=span_data.get("attributes", {}),
-                )
-                trace.spans.append(span)
-            return trace
-        except Exception:
-            return None
+        """Load a trace from disk by trace_id.
+
+        Prefers traces.jsonl, falls back to legacy {trace_id}.json.
+        """
+        trace_dir = Path(self._trace_dir)
+
+        # Try JSONL first
+        jsonl_path = trace_dir / "traces.jsonl"
+        if jsonl_path.exists():
+            try:
+                for line in jsonl_path.read_text().splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    data = json.loads(line)
+                    if data.get("trace_id") == trace_id:
+                        return self._parse_trace_dict(data)
+            except Exception:
+                pass
+
+        # Fallback: legacy per-file format
+        legacy_path = trace_dir / f"{trace_id}.json"
+        if legacy_path.exists():
+            try:
+                data = json.loads(legacy_path.read_text())
+                return self._parse_trace_dict(data)
+            except Exception:
+                pass
+
+        return None
 
     def list_persisted_traces(self) -> list[str]:
-        """List all trace IDs persisted on disk."""
-        path = Path(self._trace_dir)
-        if not path.exists():
+        """List all trace IDs persisted on disk.
+
+        Merges IDs from traces.jsonl and legacy *.json files, deduplicated.
+        """
+        trace_dir = Path(self._trace_dir)
+        if not trace_dir.exists():
             return []
-        return sorted(
-            p.stem for p in path.glob("*.json")
-        )
+
+        ids: set[str] = set()
+
+        # From JSONL
+        jsonl_path = trace_dir / "traces.jsonl"
+        if jsonl_path.exists():
+            try:
+                for line in jsonl_path.read_text().splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    data = json.loads(line)
+                    if "trace_id" in data:
+                        ids.add(data["trace_id"])
+            except Exception:
+                pass
+
+        # From legacy files
+        for p in trace_dir.glob("*.json"):
+            ids.add(p.stem)
+
+        return sorted(ids)
 
 
 def setup_structured_logging(level: int = logging.INFO) -> logging.Logger:
