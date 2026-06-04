@@ -29,6 +29,23 @@ def _enforce_retention(path: Path, max_retention: int) -> None:
     path.write_text("\n".join(kept) + "\n")
 
 
+def extract_trajectory_from_jsonl(jsonl_path: Path, trace_id: str) -> dict | None:
+    """Find a trajectory by trace_id in a JSONL file."""
+    if not jsonl_path.exists():
+        return None
+    for line in jsonl_path.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            data = json.loads(line)
+            if data.get("trace_id") == trace_id:
+                return data
+        except Exception:
+            continue
+    return None
+
+
 class EvalRunner:
     """Loads YAML test scenarios and executes them against AgentRuntime."""
 
@@ -162,30 +179,47 @@ class EvalRunner:
         _enforce_retention(jsonl_path, retention)
 
         # Persist trajectories
-        self._save_trajectories(output_dir, results)
+        self._save_trajectories(output_dir, results, suite_name=suite_name)
 
     def _save_trajectories(
-        self, output_dir: Path, results: list[dict[str, Any]]
+        self,
+        output_dir: Path,
+        results: list[dict[str, Any]],
+        suite_name: str = "unknown",
     ) -> None:
-        """Save each scenario's trace JSON to trajectories/ subdirectory."""
-        traj_dir = output_dir / "trajectories"
+        """Append trajectory data to {suite}_trajectories.jsonl."""
         try:
-            traj_dir.mkdir(parents=True, exist_ok=True)
+            output_dir.mkdir(parents=True, exist_ok=True)
         except Exception:
             return
 
+        jsonl_path = output_dir / f"{suite_name}_trajectories.jsonl"
         for r in results:
             trace_id = r.get("trace_id")
             name = r.get("name", "unknown")
             trace_json = r.get("trace_json")
             if trace_id and trace_json:
                 try:
-                    filename = f"{name}_{trace_id}.json"
-                    (traj_dir / filename).write_text(
-                        json.dumps(trace_json, indent=2, ensure_ascii=False)
-                    )
+                    entry = json.dumps({
+                        "name": name,
+                        "trace_id": trace_id,
+                        "trace": trace_json,
+                    }, ensure_ascii=False)
+                    with open(jsonl_path, "a") as f:
+                        f.write(entry + "\n")
                 except Exception:
                     pass
+
+        # Enforce retention
+        retention = 200
+        if self._runtime is not None:
+            try:
+                val = self._runtime.config.eval.trajectories_retention
+                if isinstance(val, int):
+                    retention = val
+            except Exception:
+                pass
+        _enforce_retention(jsonl_path, retention)
 
     async def _run_scenario(self, scenario: dict[str, Any]) -> dict[str, Any]:
         """Run a single scenario using TraceReplayEngine for evaluation."""

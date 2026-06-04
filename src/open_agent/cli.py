@@ -265,20 +265,40 @@ def eval_cmd(
 
 @app.command(name="eval-replay")
 def eval_replay(
-    trajectory: str = typer.Option(..., "--trajectory", "-t", help="Trajectory JSON file path"),
+    trajectory: Optional[str] = typer.Option(None, "--trajectory", "-t", help="Trajectory JSON file path"),
     scenario: str = typer.Option(..., "--scenario", "-s", help="Scenario YAML file path"),
+    trace_id: Optional[str] = typer.Option(None, "--trace-id", help="Trace ID to look up in JSONL"),
+    suite: Optional[str] = typer.Option("smoke", "--suite", help="Suite name for JSONL lookup"),
+    results_dir: str = typer.Option(".open_agent/eval_results", "--dir", "-d", help="Eval results directory"),
 ) -> None:
     """Replay a saved trajectory against a scenario (offline, no LLM)."""
     from open_agent.eval.replay import TraceReplayEngine
+    from open_agent.eval.runner import extract_trajectory_from_jsonl
     from open_agent.eval.scenario import Scenario
     from open_agent.trace import Trace
 
-    traj_path = Path(trajectory)
-    scen_path = Path(scenario)
-
-    if not traj_path.exists():
-        console.print(f"[red]Trajectory not found: {traj_path}[/red]")
+    if not trajectory and not trace_id:
+        console.print("[red]Provide --trajectory or --trace-id[/red]")
         raise typer.Exit(1)
+
+    traj_data = None
+
+    if trace_id:
+        # Look up in JSONL
+        jsonl_path = Path(results_dir) / f"{suite}_trajectories.jsonl"
+        entry = extract_trajectory_from_jsonl(jsonl_path, trace_id)
+        if entry is None:
+            console.print(f"[red]Trajectory not found in JSONL: {trace_id}[/red]")
+            raise typer.Exit(1)
+        traj_data = entry.get("trace", entry)
+    elif trajectory:
+        traj_path = Path(trajectory)
+        if not traj_path.exists():
+            console.print(f"[red]Trajectory not found: {traj_path}[/red]")
+            raise typer.Exit(1)
+        traj_data = json.loads(traj_path.read_text())
+
+    scen_path = Path(scenario)
     if not scen_path.exists():
         console.print(f"[red]Scenario not found: {scen_path}[/red]")
         raise typer.Exit(1)
@@ -287,9 +307,8 @@ def eval_replay(
     try:
         from open_agent.trace import Span, SpanKind, SpanStatus
 
-        data = json.loads(traj_path.read_text())
-        trace = Trace(trace_id=data.get("trace_id", "replay"), metadata=data.get("metadata", {}))
-        for span_data in data.get("spans", []):
+        trace = Trace(trace_id=traj_data.get("trace_id", "replay"), metadata=traj_data.get("metadata", {}))
+        for span_data in traj_data.get("spans", []):
             kind = SpanKind(span_data.get("kind", "internal"))
             span = Span(
                 operation=span_data.get("operation", ""),

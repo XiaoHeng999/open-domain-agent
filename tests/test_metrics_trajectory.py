@@ -58,7 +58,7 @@ class TestComputeMetrics:
 
 class TestTrajectoryPersistence:
     async def test_trajectory_saved(self, smoke_dir, eval_dir, monkeypatch, tmp_path):
-        """Trajectory JSON should be saved to trajectories/ subdirectory."""
+        """Trajectory JSON should be saved to {suite}_trajectories.jsonl."""
         monkeypatch.chdir(tmp_path)
 
         import yaml
@@ -87,16 +87,14 @@ class TestTrajectoryPersistence:
         runner = EvalRunner(scenarios_dir=Path(eval_dir), runtime=mock_runtime)
         results = await runner.run_suite("smoke")
 
-        # Check trajectory was saved
-        traj_dir = tmp_path / ".open_agent" / "eval_results" / "trajectories"
-        assert traj_dir.exists()
-        traj_files = list(traj_dir.glob("*.json"))
-        assert len(traj_files) == 1
-        assert "test_traj" in traj_files[0].name
-
-        # Verify JSON content
-        traj_data = json.loads(traj_files[0].read_text())
-        assert traj_data["trace_id"] == trace.trace_id
+        # Check trajectory was saved to JSONL
+        jsonl_path = tmp_path / ".open_agent" / "eval_results" / "smoke_trajectories.jsonl"
+        assert jsonl_path.exists()
+        lines = jsonl_path.read_text().strip().splitlines()
+        assert len(lines) == 1
+        traj_entry = json.loads(lines[0])
+        assert traj_entry["name"] == "test_traj"
+        assert traj_entry["trace_id"] == trace.trace_id
 
     async def test_metrics_in_report(self, smoke_dir, eval_dir, monkeypatch, tmp_path):
         """Report JSON should contain metrics field."""
@@ -128,10 +126,12 @@ class TestTrajectoryPersistence:
         runner = EvalRunner(scenarios_dir=Path(eval_dir), runtime=mock_runtime)
         await runner.run_suite("smoke")
 
-        # Find the report file
+        # Find the report JSONL
         results_dir = tmp_path / ".open_agent" / "eval_results"
-        reports = list(results_dir.glob("smoke_*.json"))
-        assert len(reports) == 1
-        report = json.loads(reports[0].read_text())
+        jsonl = results_dir / "smoke.jsonl"
+        assert jsonl.exists()
+        lines = jsonl.read_text().strip().splitlines()
+        assert len(lines) >= 1
+        report = json.loads(lines[0])
         assert "metrics" in report
         assert "tool_call_success_rate" in report["metrics"]
