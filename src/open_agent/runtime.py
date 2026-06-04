@@ -398,6 +398,32 @@ class AgentRuntime(BaseComponent):
                 metadata={"clarification": True, "missing_slots": routing_decision.intent.missing_slots},
             )
 
+        # Fast path: skip ReAct for simple requests with no slots and no missing slots
+        if (
+            routing_decision.skip_planning
+            and not routing_decision.intent.slots
+            and not routing_decision.intent.missing_slots
+        ):
+            messages = [
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": user_input},
+            ]
+            answer = await self.provider.complete(messages, max_tokens=256)
+            span = trace.create_span(operation="fast_path", kind=SpanKind.AGENT_LOOP)
+            span.attributes.update({
+                "intent": routing_decision.intent.intent,
+                "domain": routing_decision.domain.domain,
+                "answer_len": len(answer),
+            })
+            duration_ms = (time.time() - start_time) * 1000
+            return AgentResponse(
+                output=answer,
+                trace_id=trace.trace_id,
+                routing=routing_decision,
+                duration_ms=duration_ms,
+                metadata={"fast_path": True},
+            )
+
         # Stage 2: Skills matching
         matched_skills = self.skill_matcher.get_skills_for_prompt(
             routing_decision.domain.domain, user_input
