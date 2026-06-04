@@ -1,5 +1,5 @@
 {
-  "01-checkpoint-sqlite-default": "doing",
+  "01-checkpoint-sqlite-default": "done",
   "02-config-retention-foundation": "done",
   "03-eval-results-jsonl": "pending",
   "04-eval-trajectories-jsonl": "pending",
