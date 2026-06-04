@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 from typing import Optional
 
@@ -16,9 +17,23 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
 from open_agent.config_loader import load_config
+from open_agent.trace import setup_structured_logging
 
 app = typer.Typer(name="agent", help="Open-domain Agent Framework CLI")
 console = Console()
+
+_verbose: bool = False
+
+
+@app.callback()
+def main(
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show trace and debug info"),
+    debug: bool = typer.Option(False, "--debug", help="Enable debug logging (implies --verbose)"),
+) -> None:
+    global _verbose
+    _verbose = verbose or debug
+    if debug:
+        setup_structured_logging(level=logging.DEBUG)
 
 
 def _run_async(coro):
@@ -66,11 +81,12 @@ def run(
             console.print(f"  [green]Observation:[/] {step_info['observation']}")
 
     console.print(f"\n[bold green]Answer:[/] {response.output}")
-    console.print(
-        f"[dim]Trace: {response.trace_id} | "
-        f"Steps: {response.metadata.get('total_steps', '?')} | "
-        f"Duration: {response.duration_ms:.0f}ms[/dim]"
-    )
+    if _verbose:
+        console.print(
+            f"[dim]Trace: {response.trace_id} | "
+            f"Steps: {response.metadata.get('total_steps', '?')} | "
+            f"Duration: {response.duration_ms:.0f}ms[/dim]"
+        )
 
 
 @app.command()
@@ -131,11 +147,12 @@ def chat(
                             console.print(f"  [green]Observation:[/] {preview}")
 
                     console.print(f"\n[bold green]Answer:[/] {response.output}")
-                    console.print(
-                        f"[dim]📊 Trace: {response.trace_id} | "
-                        f"Steps: {response.metadata.get('total_steps', '?')} | "
-                        f"Duration: {response.duration_ms:.0f}ms[/dim]\n"
-                    )
+                    if _verbose:
+                        console.print(
+                            f"[dim]Trace: {response.trace_id} | "
+                            f"Steps: {response.metadata.get('total_steps', '?')} | "
+                            f"Duration: {response.duration_ms:.0f}ms[/dim]\n"
+                        )
                 except Exception as exc:
                     console.print(f"[red]Error: {exc}[/red]\n")
         finally:

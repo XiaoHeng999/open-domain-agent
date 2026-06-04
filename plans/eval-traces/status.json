@@ -1,6 +1,6 @@
 {
   "01-trace-persistence": "done",
-  "02-cli-verbose-debug": "pending",
+  "02-cli-verbose-debug": "doing",
   "03-memory-spans": "pending",
   "04-recovery-spans": "pending",
   "05-eval-path-b": "pending",
