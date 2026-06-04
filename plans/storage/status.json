@@ -2,6 +2,6 @@
   "01-checkpoint-sqlite-default": "done",
   "02-config-retention-foundation": "done",
   "03-eval-results-jsonl": "done",
-  "04-eval-trajectories-jsonl": "doing",
+  "04-eval-trajectories-jsonl": "done",
   "05-trace-jsonl": "done"
 }
