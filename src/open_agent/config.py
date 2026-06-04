@@ -128,12 +128,20 @@ class CheckpointConfig(BaseModel):
     storage_path: str = ".open_agent/checkpoints"
 
 
+class EvalConfig(BaseModel):
+    """Eval system configuration — retention limits for JSONL storage."""
+
+    results_retention: int = Field(default=100, ge=1)
+    trajectories_retention: int = Field(default=200, ge=1)
+
+
 class TraceConfig(BaseModel):
     """Trace system configuration."""
 
     enabled: bool = True
     store_traces: bool = True
     trace_dir: str = ".open_agent/traces"
+    trace_retention: int = Field(default=100, ge=1)
 
 
 class ToolsConfig(BaseModel):
@@ -215,6 +223,7 @@ class AgentConfig(BaseModel):
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     routing: RoutingConfig = Field(default_factory=RoutingConfig)
     checkpoint: CheckpointConfig = Field(default_factory=CheckpointConfig)
+    eval: EvalConfig = Field(default_factory=EvalConfig)
     trace: TraceConfig = Field(default_factory=TraceConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     hooks: HooksConfig = Field(default_factory=HooksConfig)
@@ -261,6 +270,9 @@ def _apply_env_overrides(data: dict[str, Any]) -> None:
         "OPEN_AGENT_PERMISSION_MODE": ("permissions", "mode"),
         "OPEN_AGENT_TRACE_DIR": ("trace", "trace_dir"),
         "OPEN_AGENT_STORE_TRACES": ("trace", "store_traces"),
+        "OPEN_AGENT_TRACE_RETENTION": ("trace", "trace_retention"),
+        "OPEN_AGENT_EVAL_RESULTS_RETENTION": ("eval", "results_retention"),
+        "OPEN_AGENT_EVAL_TRAJECTORIES_RETENTION": ("eval", "trajectories_retention"),
     }
     for env_key, path_parts in env_map.items():
         val = os.environ.get(env_key)
