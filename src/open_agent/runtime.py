@@ -598,6 +598,7 @@ class AgentRuntime(BaseComponent):
     async def run_eval_scenario(self, scenario) -> dict[str, Any]:
         """Run an evaluation scenario and return results."""
         from open_agent.eval.replay import TraceReplayEngine
+        from open_agent.trace import SpanKind
 
         response = await self.run(scenario.input)
         trace = self.trace_manager.get_trace(response.trace_id)
@@ -605,6 +606,13 @@ class AgentRuntime(BaseComponent):
         if trace:
             engine = TraceReplayEngine()
             replay_result = engine.replay(trace, scenario)
+
+            # Create EVAL span
+            eval_span = trace.create_span("eval_scenario", kind=SpanKind.EVAL)
+            eval_span.set_attribute("scenario", scenario.name)
+            eval_span.set_attribute("passed", replay_result.passed)
+            eval_span.finish()
+
             return {
                 "scenario": scenario.name,
                 "passed": replay_result.passed,

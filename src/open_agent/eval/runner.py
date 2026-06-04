@@ -11,6 +11,7 @@ import yaml
 
 from open_agent.eval.replay import TraceReplayEngine
 from open_agent.eval.scenario import Scenario, StepAssertion
+from open_agent.trace import SpanKind
 
 logger = logging.getLogger("open_agent.eval")
 
@@ -161,6 +162,14 @@ class EvalRunner:
         if trace is not None and type(trace).__name__ == "Trace":
             replay_result = self._replay_engine.replay(trace, scenario_obj)
             status = "pass" if replay_result.passed else "fail"
+
+            # Create EVAL span in the agent's trace
+            eval_span = trace.create_span("eval_scenario", kind=SpanKind.EVAL)
+            eval_span.set_attribute("scenario", scenario["name"])
+            eval_span.set_attribute("passed", replay_result.passed)
+            eval_span.set_attribute("tool_accuracy", replay_result.tool_call_accuracy)
+            eval_span.set_attribute("assertion_rate", replay_result.assertion_pass_rate)
+            eval_span.finish()
 
             checks = []
             for comp in replay_result.step_comparisons:
