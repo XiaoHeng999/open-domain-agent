@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+from open_agent.eval.replay import TraceReplayEngine
+from open_agent.eval.scenario import Scenario, StepAssertion
 
 logger = logging.getLogger("open_agent.eval")
 
@@ -23,6 +25,7 @@ class EvalRunner:
     ) -> None:
         self._scenarios_dir = Path(scenarios_dir) if scenarios_dir else Path("evals")
         self._runtime = runtime
+        self._replay_engine = TraceReplayEngine()
 
     def load_suite(self, suite_name: str) -> list[dict[str, Any]]:
         """Load all YAML scenarios from a suite directory."""
@@ -36,6 +39,46 @@ class EvalRunner:
             if data and "name" in data and "input" in data:
                 scenarios.append(data)
         return scenarios
+
+    def _yaml_to_scenario(self, yaml_data: dict[str, Any]) -> Scenario:
+        """Convert a YAML dict to a Scenario dataclass.
+
+        Supports both old format (expected_tools, expected_outcome) and
+        new format (assertions, expected_tool_calls).
+        """
+        # Parse assertions from new format
+        assertions: list[StepAssertion] = []
+        for raw_assert in yaml_data.get("assertions", []):
+            assertions.append(StepAssertion(
+                step=raw_assert.get("step", 0),
+                type=raw_assert["type"],
+                tool=raw_assert.get("tool"),
+                params_contain=raw_assert.get("params_contain"),
+                expected_value=raw_assert.get("expected_value"),
+                description=raw_assert.get("description", ""),
+            ))
+
+        # Convert old-format expected_outcome to assertion
+        expected_outcome = yaml_data.get("expected_outcome")
+        if expected_outcome:
+            assertions.append(StepAssertion(
+                step=0,
+                type="output_contains",
+                expected_value=expected_outcome,
+            ))
+
+        # Expected tool calls from old or new format
+        expected_tool_calls = yaml_data.get("expected_tools", yaml_data.get("expected_tool_calls", []))
+
+        return Scenario(
+            name=yaml_data["name"],
+            input=yaml_data["input"],
+            expected_tool_calls=expected_tool_calls,
+            expected_output=yaml_data.get("expected_outcome", ""),
+            step_assertions=assertions,
+            metadata=yaml_data.get("metadata", {}),
+            domain=yaml_data.get("domain", "general"),
+        )
 
     async def run_suite(self, suite_name: str) -> list[dict[str, Any]]:
         """Execute all scenarios in a suite, persist results, and return them."""
@@ -85,7 +128,7 @@ class EvalRunner:
         )
 
     async def _run_scenario(self, scenario: dict[str, Any]) -> dict[str, Any]:
-        """Run a single scenario and check expectations."""
+        """Run a single scenario using TraceReplayEngine for evaluation."""
         try:
             response = await self._execute_scenario(scenario["input"])
         except Exception as exc:
@@ -95,14 +138,71 @@ class EvalRunner:
                 "error": str(exc),
             }
 
-        checks = self._check_expectations(scenario, response)
+        if response is None:
+            return {
+                "name": scenario["name"],
+                "status": "error",
+                "error": "No response from runtime",
+            }
+
+        # Convert YAML to Scenario and use TraceReplayEngine
+        scenario_obj = self._yaml_to_scenario(scenario)
+
+        # Get trace from runtime's trace manager
+        trace = None
+        if self._runtime is not None and hasattr(self._runtime, "trace_manager"):
+            try:
+                tm = self._runtime.trace_manager
+                trace = tm.get_trace(response.trace_id)
+            except Exception:
+                trace = None
+
+        # Only use TraceReplayEngine when we have a real Trace object
+        if trace is not None and type(trace).__name__ == "Trace":
+            replay_result = self._replay_engine.replay(trace, scenario_obj)
+            status = "pass" if replay_result.passed else "fail"
+
+            checks = []
+            for comp in replay_result.step_comparisons:
+                checks.append({
+                    "type": "tool_match",
+                    "step": comp.step_number,
+                    "actual": comp.actual_tool,
+                    "expected": comp.expected_tool,
+                    "passed": comp.match,
+                })
+            for comp in replay_result.step_comparisons:
+                for ar in comp.assertion_results:
+                    checks.append({
+                        "type": ar.assertion.type,
+                        "step": comp.step_number,
+                        "passed": ar.passed,
+                        "message": ar.message,
+                    })
+
+            if not checks:
+                checks.append({"type": "no_expectations", "passed": True})
+
+            return {
+                "name": scenario["name"],
+                "status": status,
+                "checks": checks,
+                "output": response.output,
+                "tool_call_accuracy": replay_result.tool_call_accuracy,
+                "assertion_pass_rate": replay_result.assertion_pass_rate,
+            }
+
+        # Fallback: no trace available, use basic substring matching
+        checks = self._check_expectations_fallback(scenario, response)
         status = "pass" if all(c["passed"] for c in checks) else "fail"
 
         return {
             "name": scenario["name"],
             "status": status,
             "checks": checks,
-            "output": response.output if response else "",
+            "output": response.output,
+            "tool_call_accuracy": 0.0,
+            "assertion_pass_rate": 0.0,
         }
 
     async def _execute_scenario(self, user_input: str) -> Any:
@@ -111,15 +211,14 @@ class EvalRunner:
             return await self._runtime.run(user_input)
         raise NotImplementedError("No runtime configured for EvalRunner")
 
-    def _check_expectations(
+    def _check_expectations_fallback(
         self,
         scenario: dict[str, Any],
         response: Any,
     ) -> list[dict[str, Any]]:
-        """Check scenario expectations against the response."""
+        """Fallback: check expectations via substring matching when no trace."""
         checks: list[dict[str, Any]] = []
 
-        # Check expected_tools — look for tool names in step actions
         expected_tools = scenario.get("expected_tools", [])
         if expected_tools:
             steps = response.metadata.get("steps", []) if response and response.metadata else []
@@ -138,7 +237,6 @@ class EvalRunner:
                     "passed": passed,
                 })
 
-        # Check expected_outcome — substring match in output
         expected_outcome = scenario.get("expected_outcome")
         if expected_outcome:
             output = response.output if response else ""
@@ -149,7 +247,6 @@ class EvalRunner:
                 "passed": passed,
             })
 
-        # If no expectations defined, pass by default
         if not checks:
             checks.append({"type": "no_expectations", "passed": True})
 

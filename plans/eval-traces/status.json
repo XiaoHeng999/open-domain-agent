@@ -3,7 +3,7 @@
   "02-cli-verbose-debug": "done",
   "03-memory-spans": "done",
   "04-recovery-spans": "done",
-  "05-eval-path-b": "pending",
+  "05-eval-path-b": "doing",
   "06-llmjudge-fix": "pending",
   "07-metrics-trajectory": "pending",
   "08-monitoring-cleanup": "pending",

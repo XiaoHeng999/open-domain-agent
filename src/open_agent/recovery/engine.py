@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from open_agent.errors import ToolError
+from open_agent.trace import SpanKind
 
 from .classifier import ErrorClassifier, ToolErrorType
 from .strategies import (
@@ -72,6 +73,7 @@ class RecoveryChain:
         context: dict[str, Any],
     ) -> RecoveryTrace:
         """Run every strategy in order; stop at first success."""
+        span = _start_recovery_span(context, self.error_type.value, len(self.strategies))
         overall_start = time.monotonic()
         trace = RecoveryTrace(
             error=error,
@@ -86,6 +88,7 @@ class RecoveryChain:
             if result.status == RecoveryStatus.SUCCESS:
                 trace.final_status = RecoveryStatus.SUCCESS
                 trace.total_duration_ms = (time.monotonic() - overall_start) * 1000
+                _finish_recovery_span(span, "success")
                 logger.info(
                     "Recovery succeeded: %s (attempt %d) for %s",
                     strategy.name,
@@ -97,6 +100,7 @@ class RecoveryChain:
         # Exhausted ----------------------------------------------------------
         trace.final_status = RecoveryStatus.ESCALATE
         trace.total_duration_ms = (time.monotonic() - overall_start) * 1000
+        _finish_recovery_span(span, "escalate")
         logger.warning(
             "Recovery chain exhausted for %s — escalating to agent.",
             self.error_type.value,
@@ -209,3 +213,23 @@ async def execute_recovery_chain(
 
     chain = reg.get_chain(error_type)
     return await chain.execute(wrapped, ctx)
+
+
+def _start_recovery_span(context: dict[str, Any], error_type: str, strategy_count: int):
+    tm = context.get("_trace_manager")
+    tid = context.get("_current_trace_id")
+    if tm is None or tid is None:
+        return None
+    trace_obj = tm.get_trace(tid)
+    if trace_obj is None:
+        return None
+    span = trace_obj.create_span("recovery", kind=SpanKind.RECOVERY)
+    span.set_attribute("error_type", error_type)
+    span.set_attribute("strategy_count", strategy_count)
+    return span
+
+
+def _finish_recovery_span(span, final_status: str):
+    if span is not None:
+        span.set_attribute("final_status", final_status)
+        span.finish()

@@ -237,6 +237,7 @@ def eval_cmd(
     table = Table(title="Eval Results")
     table.add_column("Scenario", style="cyan")
     table.add_column("Status")
+    table.add_column("Tool Accuracy")
     table.add_column("Details")
 
     passed = 0
@@ -249,11 +250,13 @@ def eval_cmd(
         else:
             failed += 1
             style = "red"
+        accuracy = r.get("tool_call_accuracy")
+        acc_str = f"{accuracy:.0%}" if accuracy is not None else "-"
         details = "; ".join(
             f"{c['type']}: {'ok' if c['passed'] else 'FAIL'}"
             for c in r.get("checks", [])
         )
-        table.add_row(r["name"], f"[{style}]{status}[/{style}]", details)
+        table.add_row(r["name"], f"[{style}]{status}[/{style}]", acc_str, details)
 
     console.print(table)
     console.print(f"\n[bold]Summary:[/] {passed} passed, {failed} failed, {len(results)} total")

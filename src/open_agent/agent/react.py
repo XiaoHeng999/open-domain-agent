@@ -669,7 +669,7 @@ class ReActLoop:
         except ToolError as exc:
             success = False
             # --- Recovery integration ---
-            recovery_trace = await self._try_recover(exc, action)
+            recovery_trace = await self._try_recover(exc, action, trace)
             if recovery_trace is not None and recovery_trace.final_status.value == "success":
                 last_attempt = recovery_trace.attempts[-1]
                 content = str(last_attempt.data.get("result", last_attempt.message))
@@ -711,7 +711,7 @@ class ReActLoop:
                     # Attempt recovery
                     from open_agent.errors import ToolError as _TE
                     recovery_exc = _TE(blocked_content)
-                    recovery_trace = await self._try_recover(recovery_exc, action)
+                    recovery_trace = await self._try_recover(recovery_exc, action, trace)
                     if recovery_trace is not None and recovery_trace.final_status.value == "success":
                         last_attempt = recovery_trace.attempts[-1]
                         content = str(last_attempt.data.get("result", last_attempt.message))
@@ -754,6 +754,7 @@ class ReActLoop:
         self,
         error: ToolError,
         action: Action,
+        trace: Trace | None = None,
     ) -> Any:
         """Attempt recovery via the recovery chain. Returns RecoveryTrace or None."""
         try:
@@ -769,6 +770,10 @@ class ReActLoop:
         tool = self._registry.get(action.tool_name)
         if tool is not None:
             context["tool_handler"] = tool.execute
+
+        if trace is not None and hasattr(self, "_trace_manager"):
+            context["_trace_manager"] = self._trace_manager
+            context["_current_trace_id"] = trace.trace_id
 
         return await execute_recovery_chain(error, context)
 
