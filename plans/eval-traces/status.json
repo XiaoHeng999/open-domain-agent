@@ -1,7 +1,7 @@
 {
   "01-trace-persistence": "done",
   "02-cli-verbose-debug": "done",
-  "03-memory-spans": "doing",
+  "03-memory-spans": "done",
   "04-recovery-spans": "pending",
   "05-eval-path-b": "pending",
   "06-llmjudge-fix": "pending",
