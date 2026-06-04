@@ -16,6 +16,7 @@ from open_agent.base import MemoryManager
 from open_agent.config import MemoryConfig
 from open_agent.memory.models import Message, TaskState
 from open_agent.memory.token_utils import estimate_tokens
+from open_agent.trace import SpanKind
 
 logger = logging.getLogger("open_agent.memory.runtime")
 
@@ -76,6 +77,11 @@ class RuntimeMemory(MemoryManager):
 
     async def add_message(self, role: str, content: str) -> None:
         """Append a message and trigger compression check."""
+        span = _start_memory_span(self, "add_message")
+        if span:
+            span.set_attribute("operation", "write")
+            span.set_attribute("role", role)
+            span.set_attribute("content_length", len(content))
         msg = Message(role=role, content=content)
         self._messages.append(msg)
         logger.debug(
@@ -85,6 +91,7 @@ class RuntimeMemory(MemoryManager):
         if self._config.persistence_enabled and self._db_conn is not None:
             await asyncio.to_thread(self._persist_message, role, content)
         await self._maybe_compress()
+        _finish_span(span)
 
     async def get_context(self) -> list[dict[str, Any]]:
         """Return rolling_summary + raw messages formatted for LLM consumption."""
@@ -260,10 +267,19 @@ class RuntimeMemory(MemoryManager):
         level = self.compression_level
         if level == _COMPRESS_NORMAL:
             return
+        span = _start_memory_span(self, "compress")
+        if span:
+            span.set_attribute("operation", "compress")
+        compressed_count = 0
         if level in (_COMPRESS_COMPRESSING, _COMPRESS_AGGRESSIVE):
+            before = len(self._messages)
             await self._compress_rolling_summary()
+            compressed_count = before - len(self._messages)
         if level == _COMPRESS_AGGRESSIVE:
             self._truncate_tool_cache()
+        if span:
+            span.set_attribute("messages_compressed", compressed_count)
+        _finish_span(span)
 
     async def _compress_rolling_summary(self) -> None:
         """Compress the earliest 2 turns of raw messages into rolling summary."""
@@ -312,3 +328,24 @@ class RuntimeMemory(MemoryManager):
     def _cache_key(tool_name: str, args: dict[str, Any]) -> str:
         raw = f"{tool_name}:{sorted(args.items())}"
         return hashlib.md5(raw.encode()).hexdigest()
+
+
+def _start_memory_span(obj: Any, operation: str, **attrs: Any) -> Any:
+    """Create a MEMORY_OP span if tracing is active, else return None."""
+    tm = getattr(obj, "_trace_manager", None)
+    tid = getattr(obj, "_current_trace_id", None)
+    if tm is None or tid is None:
+        return None
+    trace = tm.get_trace(tid)
+    if trace is None:
+        return None
+    span = trace.create_span(operation, kind=SpanKind.MEMORY_OP)
+    span.set_attribute("operation", operation)
+    for k, v in attrs.items():
+        span.set_attribute(k, v)
+    return span
+
+
+def _finish_span(span: Any) -> None:
+    if span is not None:
+        span.finish()

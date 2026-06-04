@@ -14,6 +14,7 @@ import numpy as np
 from open_agent.base import MemoryManager
 from open_agent.config import MemoryConfig
 from open_agent.memory.token_utils import estimate_tokens
+from open_agent.trace import SpanKind
 
 logger = logging.getLogger("open_agent.memory.retrieval")
 
@@ -218,6 +219,7 @@ class RetrievalMemory(MemoryManager):
         **kwargs: Any,
     ) -> None:
         """Write an episodic record."""
+        span = _start_retrieval_span(self, "episodic_write")
         text = f"Intent: {intent}. Steps: {steps_summary}. Result: {result}"
         metadata = {
             "layer": "episodic",
@@ -229,6 +231,7 @@ class RetrievalMemory(MemoryManager):
         record_id = uuid.uuid4().hex[:12]
         self._store.write(record_id, embedding, text, metadata)
         self._store.save_to_disk(self._store_dir)
+        _finish_span(span)
 
     # ------------------------------------------------------------------
     # Semantic sub-layer
@@ -270,6 +273,7 @@ class RetrievalMemory(MemoryManager):
         if not query_text:
             return []
 
+        span = _start_retrieval_span(self, "retrieval_query", top_k=top_k)
         top_k = min(top_k, self._config.retrieval_top_k)
         if max_inject_tokens <= 0:
             max_inject_tokens = self._config.retrieval_max_inject_tokens
@@ -295,4 +299,27 @@ class RetrievalMemory(MemoryManager):
             })
             total_tokens += tokens
 
+        if span:
+            span.set_attribute("results_count", len(filtered))
+        _finish_span(span)
         return filtered
+
+
+def _start_retrieval_span(obj, operation: str, **attrs):
+    tm = getattr(obj, "_trace_manager", None)
+    tid = getattr(obj, "_current_trace_id", None)
+    if tm is None or tid is None:
+        return None
+    trace = tm.get_trace(tid)
+    if trace is None:
+        return None
+    span = trace.create_span(operation, kind=SpanKind.MEMORY_OP)
+    span.set_attribute("operation", operation)
+    for k, v in attrs.items():
+        span.set_attribute(k, v)
+    return span
+
+
+def _finish_span(span):
+    if span is not None:
+        span.finish()

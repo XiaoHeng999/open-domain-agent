@@ -10,6 +10,7 @@ from typing import Any
 
 from open_agent.base import MemoryManager
 from open_agent.config import MemoryConfig
+from open_agent.trace import SpanKind
 
 logger = logging.getLogger("open_agent.memory.archive")
 
@@ -53,9 +54,11 @@ class ArchiveMemory(MemoryManager):
 
         Adds timestamp automatically if not present.
         """
+        span = _start_archive_span(self, "archive_write")
         record.setdefault("ts", time.strftime("%Y-%m-%dT%H:%M:%SZ"))
         with open(self._path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        _finish_span(span)
 
     def query(
         self,
@@ -96,3 +99,23 @@ class ArchiveMemory(MemoryManager):
     @property
     def archive_path(self) -> Path:
         return self._path
+
+
+def _start_archive_span(obj, operation: str, **attrs):
+    tm = getattr(obj, "_trace_manager", None)
+    tid = getattr(obj, "_current_trace_id", None)
+    if tm is None or tid is None:
+        return None
+    trace = tm.get_trace(tid)
+    if trace is None:
+        return None
+    span = trace.create_span(operation, kind=SpanKind.MEMORY_OP)
+    span.set_attribute("operation", operation)
+    for k, v in attrs.items():
+        span.set_attribute(k, v)
+    return span
+
+
+def _finish_span(span):
+    if span is not None:
+        span.finish()

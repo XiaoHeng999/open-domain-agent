@@ -11,6 +11,7 @@ from typing import Any
 
 from open_agent.base import MemoryManager
 from open_agent.config import MemoryConfig
+from open_agent.trace import SpanKind
 
 logger = logging.getLogger("open_agent.memory.profile")
 
@@ -83,14 +84,16 @@ class ProfileMemory(MemoryManager):
 
     def load(self) -> dict[str, Any]:
         """Load profile from SQLite."""
+        span = _start_profile_span(self, "profile_read")
         assert self._conn
         row = self._conn.execute(
             "SELECT preferences, constraints, tech_stack, risk_tolerance, style, avoidance_hints, updated_at "
             "FROM user_profile WHERE id = 1"
         ).fetchone()
         if not row:
+            _finish_span(span)
             return {}
-        return {
+        result = {
             "preferences": json.loads(row[0]),
             "constraints": json.loads(row[1]),
             "tech_stack": json.loads(row[2]),
@@ -99,9 +102,12 @@ class ProfileMemory(MemoryManager):
             "avoidance_hints": json.loads(row[5]),
             "updated_at": row[6],
         }
+        _finish_span(span)
+        return result
 
     def save(self, profile: dict[str, Any]) -> None:
         """Write profile back to SQLite (atomic transaction)."""
+        span = _start_profile_span(self, "profile_write")
         assert self._conn
         self._conn.execute(
             """UPDATE user_profile SET
@@ -119,6 +125,7 @@ class ProfileMemory(MemoryManager):
             ),
         )
         self._conn.commit()
+        _finish_span(span)
 
     async def update_preferences(self, prefs: dict[str, Any]) -> None:
         """Merge new preferences into existing profile."""
@@ -215,3 +222,23 @@ class ProfileMemory(MemoryManager):
         if "avoidance_hints" in data:
             for hint in data["avoidance_hints"]:
                 await self.add_avoidance_hint(hint)
+
+
+def _start_profile_span(obj, operation: str, **attrs):
+    tm = getattr(obj, "_trace_manager", None)
+    tid = getattr(obj, "_current_trace_id", None)
+    if tm is None or tid is None:
+        return None
+    trace = tm.get_trace(tid)
+    if trace is None:
+        return None
+    span = trace.create_span(operation, kind=SpanKind.MEMORY_OP)
+    span.set_attribute("operation", operation)
+    for k, v in attrs.items():
+        span.set_attribute(k, v)
+    return span
+
+
+def _finish_span(span):
+    if span is not None:
+        span.finish()
