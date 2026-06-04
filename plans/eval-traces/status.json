@@ -5,7 +5,7 @@
   "04-recovery-spans": "done",
   "05-eval-path-b": "done",
   "06-llmjudge-fix": "done",
-  "07-metrics-trajectory": "pending",
+  "07-metrics-trajectory": "done",
   "08-monitoring-cleanup": "pending",
   "09-ci-trend-replay": "pending",
   "10-eval-spans": "done"
