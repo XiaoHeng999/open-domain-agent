@@ -1,5 +1,5 @@
 {
-  "01-core-fast-path-branch": "doing",
-  "02-fast-path-trace-span": "pending",
+  "01-core-fast-path-branch": "done",
+  "02-fast-path-trace-span": "doing",
   "03-fast-path-tests": "pending"
 }

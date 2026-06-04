@@ -409,16 +409,18 @@ class AgentRuntime(BaseComponent):
                 {"role": "user", "content": user_input},
             ]
             answer = await self.provider.complete(messages, max_tokens=256)
-            span = trace.create_span(operation="fast_path", kind=SpanKind.AGENT_LOOP)
-            span.attributes.update({
-                "intent": routing_decision.intent.intent,
-                "domain": routing_decision.domain.domain,
-                "answer_len": len(answer),
-            })
+            if trace is not None:
+                span = trace.create_span(operation="fast_path", kind=SpanKind.AGENT_LOOP)
+                span.attributes.update({
+                    "intent": routing_decision.intent.intent,
+                    "domain": routing_decision.domain.domain,
+                    "answer_len": len(answer),
+                })
+                span.finish()
             duration_ms = (time.time() - start_time) * 1000
             return AgentResponse(
                 output=answer,
-                trace_id=trace.trace_id,
+                trace_id=trace.trace_id if trace else "",
                 routing=routing_decision,
                 duration_ms=duration_ms,
                 metadata={"fast_path": True},
