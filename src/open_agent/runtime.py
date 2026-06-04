@@ -243,12 +243,9 @@ class AgentRuntime(BaseComponent):
 
         # Checkpoint
         if self.config.checkpoint.enabled:
-            from open_agent.checkpoint.storage import JSONStorage
             from open_agent.checkpoint.manager import CheckpointManager
-            storage = JSONStorage(self.config.checkpoint.storage_path)
             self.checkpoint_manager = CheckpointManager(
                 config=self.config.checkpoint,
-                storage=storage,
             )
             self.react_loop._checkpoint_manager = self.checkpoint_manager
 
@@ -354,6 +351,8 @@ class AgentRuntime(BaseComponent):
                 await self._mcp_manager.stop_server(server_info["server_id"])
         if self._profile_memory:
             self._profile_memory.close()
+        if self.checkpoint_manager and hasattr(self.checkpoint_manager._storage, "close"):
+            self.checkpoint_manager._storage.close()
         if self.sandbox:
             await self.sandbox.on_stop()
         await super().on_stop()

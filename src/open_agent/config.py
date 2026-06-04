@@ -124,8 +124,8 @@ class CheckpointConfig(BaseModel):
 
     enabled: bool = True
     interval: int = Field(default=1, ge=1)
-    storage_backend: Literal["json", "sqlite"] = "json"
-    storage_path: str = ".open_agent/checkpoints"
+    storage_backend: Literal["json", "sqlite"] = "sqlite"
+    storage_path: str = ".open_agent/checkpoints/checkpoints.sqlite"
 
 
 class EvalConfig(BaseModel):

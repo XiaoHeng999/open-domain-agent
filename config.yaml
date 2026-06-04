@@ -103,8 +103,8 @@ checkpoint:
   enabled: true
   interval: 1
   # json | sqlite
-  storage_backend: json
-  storage_path: .open_agent/checkpoints
+  storage_backend: sqlite
+  storage_path: .open_agent/checkpoints/checkpoints.sqlite
 
 trace:
   enabled: true
