@@ -515,6 +515,15 @@ class AgentRuntime(BaseComponent):
             if self._profile_memory:
                 await self._profile_memory.add_avoidance_hint(hint["hint"])
 
+        # Feedback loop → suggest eval case for high-quality traces
+        eval_suggestion = self.feedback_loop.suggest_eval_case(trace, quality)
+        if eval_suggestion is not None:
+            logger.info(
+                "Suggested eval case: trace_id=%s quality=%.0f",
+                eval_suggestion["trace_id"],
+                eval_suggestion["quality_score"],
+            )
+
         # Cleanup skills
         for skill_info in matched_skills:
             self.skill_matcher.cleanup(routing_decision.domain.domain, user_input)
