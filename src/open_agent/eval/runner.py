@@ -9,9 +9,10 @@ from typing import Any
 
 import yaml
 
-from open_agent.eval.replay import TraceReplayEngine
-from open_agent.eval.scenario import Scenario, StepAssertion
 from open_agent.eval.judge import LLMJudge
+from open_agent.eval.metrics import compute_metrics
+from open_agent.eval.replay import ReplayResult, TraceReplayEngine
+from open_agent.eval.scenario import Scenario, StepAssertion
 from open_agent.trace import SpanKind
 
 logger = logging.getLogger("open_agent.eval")
@@ -44,12 +45,7 @@ class EvalRunner:
         return scenarios
 
     def _yaml_to_scenario(self, yaml_data: dict[str, Any]) -> Scenario:
-        """Convert a YAML dict to a Scenario dataclass.
-
-        Supports both old format (expected_tools, expected_outcome) and
-        new format (assertions, expected_tool_calls).
-        """
-        # Parse assertions from new format
+        """Convert a YAML dict to a Scenario dataclass."""
         assertions: list[StepAssertion] = []
         for raw_assert in yaml_data.get("assertions", []):
             assertions.append(StepAssertion(
@@ -61,7 +57,6 @@ class EvalRunner:
                 description=raw_assert.get("description", ""),
             ))
 
-        # Convert old-format expected_outcome to assertion
         expected_outcome = yaml_data.get("expected_outcome")
         if expected_outcome:
             assertions.append(StepAssertion(
@@ -70,7 +65,6 @@ class EvalRunner:
                 expected_value=expected_outcome,
             ))
 
-        # Expected tool calls from old or new format
         expected_tool_calls = yaml_data.get("expected_tools", yaml_data.get("expected_tool_calls", []))
 
         return Scenario(
@@ -84,22 +78,31 @@ class EvalRunner:
         )
 
     async def run_suite(self, suite_name: str) -> list[dict[str, Any]]:
-        """Execute all scenarios in a suite, persist results, and return them."""
+        """Execute all scenarios in a suite, compute metrics, persist results."""
         scenarios = self.load_suite(suite_name)
         results: list[dict[str, Any]] = []
+        replay_results: list[ReplayResult] = []
 
         for scenario in scenarios:
             result = await self._run_scenario(scenario)
             results.append(result)
+            if "replay_result" in result:
+                replay_results.append(result["replay_result"])
 
-        self._save_results(suite_name, results)
+        # Compute aggregate metrics from ReplayResults
+        metrics = compute_metrics(replay_results)
+
+        self._save_results(suite_name, results, metrics)
 
         return results
 
     def _save_results(
-        self, suite_name: str, results: list[dict[str, Any]]
+        self,
+        suite_name: str,
+        results: list[dict[str, Any]],
+        metrics: Any = None,
     ) -> None:
-        """Persist eval results to .open_agent/eval_results/."""
+        """Persist eval results + metrics + trajectories."""
         output_dir = Path(".open_agent") / "eval_results"
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -117,11 +120,18 @@ class EvalRunner:
             except Exception:
                 pass
 
+        # Remove transient fields before serialization
+        clean_results = []
+        for r in results:
+            clean = {k: v for k, v in r.items() if k != "replay_result"}
+            clean_results.append(clean)
+
         report = {
             "suite": suite_name,
             "timestamp": now.isoformat(),
             "model": model_info,
-            "results": results,
+            "results": clean_results,
+            "metrics": metrics.to_dict() if metrics else {},
             "summary": {"total": len(results), "passed": passed, "failed": failed},
         }
 
@@ -129,6 +139,32 @@ class EvalRunner:
         (output_dir / filename).write_text(
             json.dumps(report, indent=2, ensure_ascii=False)
         )
+
+        # Persist trajectories
+        self._save_trajectories(output_dir, results)
+
+    def _save_trajectories(
+        self, output_dir: Path, results: list[dict[str, Any]]
+    ) -> None:
+        """Save each scenario's trace JSON to trajectories/ subdirectory."""
+        traj_dir = output_dir / "trajectories"
+        try:
+            traj_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            return
+
+        for r in results:
+            trace_id = r.get("trace_id")
+            name = r.get("name", "unknown")
+            trace_json = r.get("trace_json")
+            if trace_id and trace_json:
+                try:
+                    filename = f"{name}_{trace_id}.json"
+                    (traj_dir / filename).write_text(
+                        json.dumps(trace_json, indent=2, ensure_ascii=False)
+                    )
+                except Exception:
+                    pass
 
     async def _run_scenario(self, scenario: dict[str, Any]) -> dict[str, Any]:
         """Run a single scenario using TraceReplayEngine for evaluation."""
@@ -148,17 +184,28 @@ class EvalRunner:
                 "error": "No response from runtime",
             }
 
-        # Convert YAML to Scenario and use TraceReplayEngine
         scenario_obj = self._yaml_to_scenario(scenario)
 
         # Get trace from runtime's trace manager
         trace = None
+        trace_json = None
         if self._runtime is not None and hasattr(self._runtime, "trace_manager"):
             try:
                 tm = self._runtime.trace_manager
                 trace = tm.get_trace(response.trace_id)
+                if trace and type(trace).__name__ == "Trace":
+                    trace_json = trace.to_dict()
             except Exception:
                 trace = None
+
+        result: dict[str, Any] = {
+            "name": scenario["name"],
+            "trace_id": response.trace_id,
+            "output": response.output,
+        }
+
+        if trace_json:
+            result["trace_json"] = trace_json
 
         # Only use TraceReplayEngine when we have a real Trace object
         if trace is not None and type(trace).__name__ == "Trace":
@@ -198,29 +245,28 @@ class EvalRunner:
             expected_desc = scenario.get("expected_outcome", scenario_obj.expected_output)
             judge_score = self._judge._rule_based_judge(response.output, expected_desc)
 
-            return {
-                "name": scenario["name"],
+            result.update({
                 "status": status,
                 "checks": checks,
-                "output": response.output,
                 "tool_call_accuracy": replay_result.tool_call_accuracy,
                 "assertion_pass_rate": replay_result.assertion_pass_rate,
                 "quality_score": judge_score.score,
                 "quality_reasoning": judge_score.reasoning,
-            }
+                "replay_result": replay_result,
+            })
+            return result
 
         # Fallback: no trace available, use basic substring matching
         checks = self._check_expectations_fallback(scenario, response)
         status = "pass" if all(c["passed"] for c in checks) else "fail"
 
-        return {
-            "name": scenario["name"],
+        result.update({
             "status": status,
             "checks": checks,
-            "output": response.output,
             "tool_call_accuracy": 0.0,
             "assertion_pass_rate": 0.0,
-        }
+        })
+        return result
 
     async def _execute_scenario(self, user_input: str) -> Any:
         """Execute a scenario against the runtime. Override or set runtime."""
