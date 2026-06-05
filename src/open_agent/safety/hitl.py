@@ -111,7 +111,7 @@ class HITLApprovalManager:
             )
 
         if self._interactive:
-            approved = self._ask_human(summary, operation, details, safety_risks=safety_risks)
+            approved = await self._ask_human(summary, operation, details, safety_risks=safety_risks)
         else:
             approved = False
 
@@ -179,17 +179,18 @@ class HITLApprovalManager:
         lines.append("  [dim]Choose:[/dim]    [y] confirm / [n] reject / [d] view details")
         return "\n".join(lines)
 
-    def _ask_human(
+    async def _ask_human(
         self,
         summary: str,
         operation: str = "",
         details: dict[str, Any] | None = None,
         safety_risks: list[Any] | None = None,
     ) -> bool:
-        """Interactive human confirmation via Rich CLI."""
+        """Interactive human confirmation via prompt_toolkit (async)."""
         try:
             from rich.console import Console
             from rich.panel import Panel
+            from prompt_toolkit.shortcuts import PromptSession
 
             console = Console()
             level = self.classify_operation(operation, details).value.upper()
@@ -198,8 +199,9 @@ class HITLApprovalManager:
             )
             console.print(Panel(prompt_text, border_style="yellow"))
 
+            session: PromptSession[str] = PromptSession()
             while True:
-                response = console.input("[bold]Your choice [y/n/d]:[/bold] ").strip().lower()
+                response = (await session.prompt_async("Your choice [y/n/d]: ")).strip().lower()
 
                 if response in ("y", "yes"):
                     return True
