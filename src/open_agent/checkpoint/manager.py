@@ -97,6 +97,11 @@ class CheckpointManager(BaseComponent):
 
     # -- Public API -----------------------------------------------------------
 
+    def close_storage(self) -> None:
+        """Close the underlying storage connection."""
+        if hasattr(self._storage, "close"):
+            self._storage.close()
+
     def should_checkpoint(self, step_number: int | None = None) -> bool:
         """Return *True* when a checkpoint should be taken at *step_number*."""
         if not self.config.enabled:

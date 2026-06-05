@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import logging
 import sqlite3
+import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -49,6 +50,7 @@ class RuntimeMemory(MemoryManager):
         self._tool_cache: OrderedDict[str, str] = OrderedDict()
         self._tool_messages: list[dict[str, Any]] = []
         self._db_conn: sqlite3.Connection | None = None
+        self._db_lock = threading.Lock()
 
         if self._config.persistence_enabled:
             self._init_db()
@@ -117,6 +119,10 @@ class RuntimeMemory(MemoryManager):
     def rolling_summary(self) -> str:
         return self._rolling_summary
 
+    def get_recent_messages(self, n: int) -> list[Message]:
+        """Return the last n messages."""
+        return self._messages[-n:]
+
     @property
     def compression_level(self) -> str:
         """Return current compression level based on token usage."""
@@ -156,11 +162,12 @@ class RuntimeMemory(MemoryManager):
         self._task_state = TaskState()
         self._tool_messages.clear()
         if self._db_conn is not None:
-            try:
-                self._db_conn.execute("DELETE FROM messages")
-                self._db_conn.commit()
-            except sqlite3.Error:
-                pass
+            with self._db_lock:
+                try:
+                    self._db_conn.execute("DELETE FROM messages")
+                    self._db_conn.commit()
+                except sqlite3.Error:
+                    pass
 
     def close(self) -> None:
         """Close the SQLite connection if open."""
@@ -193,14 +200,15 @@ class RuntimeMemory(MemoryManager):
         """Write a single message to SQLite."""
         if self._db_conn is None:
             return
-        try:
-            self._db_conn.execute(
-                "INSERT INTO messages (role, content, timestamp) VALUES (?, ?, ?)",
-                (role, content, time.time()),
-            )
-            self._db_conn.commit()
-        except sqlite3.Error:
-            logger.warning("Failed to persist message to SQLite", exc_info=True)
+        with self._db_lock:
+            try:
+                self._db_conn.execute(
+                    "INSERT INTO messages (role, content, timestamp) VALUES (?, ?, ?)",
+                    (role, content, time.time()),
+                )
+                self._db_conn.commit()
+            except sqlite3.Error:
+                logger.warning("Failed to persist message to SQLite", exc_info=True)
 
     def _load_messages(self) -> None:
         """Load messages from SQLite into the in-memory buffer."""

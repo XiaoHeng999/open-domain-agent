@@ -356,8 +356,8 @@ class AgentRuntime(BaseComponent):
                 await self._mcp_manager.stop_server(server_info["server_id"])
         if self._profile_memory:
             self._profile_memory.close()
-        if self.checkpoint_manager and hasattr(self.checkpoint_manager._storage, "close"):
-            self.checkpoint_manager._storage.close()
+        if self.checkpoint_manager:
+            self.checkpoint_manager.close_storage()
         if self.sandbox:
             await self.sandbox.on_stop()
         await super().on_stop()
@@ -386,9 +386,10 @@ class AgentRuntime(BaseComponent):
         # Stage 1: Routing
         # Build routing history from runtime_memory (last 4 messages ≈ 2 turns)
         routing_history: list[dict[str, str]] | None = None
-        if self._runtime_memory and self._runtime_memory._messages:
-            recent = self._runtime_memory._messages[-4:]
-            routing_history = [{"role": m.role, "content": m.content} for m in recent]
+        if self._runtime_memory:
+            recent = self._runtime_memory.get_recent_messages(4)
+            if recent:
+                routing_history = [{"role": m.role, "content": m.content} for m in recent]
 
         routing_decision = await self.routing_pipeline.route(
             user_input, trace=trace, history=routing_history,

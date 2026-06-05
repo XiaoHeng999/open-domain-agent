@@ -85,7 +85,8 @@ class ProfileMemory(MemoryManager):
     def load(self) -> dict[str, Any]:
         """Load profile from SQLite."""
         span = _start_profile_span(self, "profile_read")
-        assert self._conn
+        if not self._conn:
+            raise RuntimeError("ProfileMemory connection not initialized")
         row = self._conn.execute(
             "SELECT preferences, constraints, tech_stack, risk_tolerance, style, avoidance_hints, updated_at "
             "FROM user_profile WHERE id = 1"
@@ -108,7 +109,8 @@ class ProfileMemory(MemoryManager):
     def save(self, profile: dict[str, Any]) -> None:
         """Write profile back to SQLite (atomic transaction)."""
         span = _start_profile_span(self, "profile_write")
-        assert self._conn
+        if not self._conn:
+            raise RuntimeError("ProfileMemory connection not initialized")
         self._conn.execute(
             """UPDATE user_profile SET
                 preferences = ?, constraints = ?, tech_stack = ?,
