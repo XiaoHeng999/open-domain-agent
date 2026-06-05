@@ -40,7 +40,7 @@ class PermissionConfig(BaseModel):
 class ModelConfig(BaseModel):
     """LLM model configuration."""
 
-    provider: Literal["openai", "anthropic", "deepseek", "local"] = "openai"
+    provider: Literal["openai", "anthropic", "deepseek"] = "openai"
     name: str = "gpt-4o"
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     max_tokens: int = Field(default=4096, ge=1)
@@ -112,7 +112,7 @@ class RoutingConfig(BaseModel):
     fast_path_confidence: float = Field(default=0.9, ge=0.0, le=1.0)
 
     # Optional independent routing model — falls back to main model when unset
-    routing_provider: Optional[Literal["openai", "anthropic", "deepseek", "local"]] = None
+    routing_provider: Optional[Literal["openai", "anthropic", "deepseek"]] = None
     routing_name: Optional[str] = None
     routing_api_key: Optional[str] = Field(default=None, repr=False)
     routing_base_url: Optional[str] = None

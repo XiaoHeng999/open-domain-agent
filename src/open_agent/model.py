@@ -461,25 +461,6 @@ class DeepSeekProvider(OpenAIProvider):
         super().__init__(config)
 
 
-class LocalProvider(ModelProvider):
-    """Stub for local model provider."""
-
-    def __init__(self, config: ModelConfig) -> None:
-        self.config = config
-
-    async def complete(self, messages: list[dict[str, Any]], **kwargs: Any) -> str:
-        return "Local model response (stub)"
-
-    async def complete_structured(
-        self, messages: list[dict[str, Any]], schema: dict[str, Any], **kwargs: Any
-    ) -> dict[str, Any]:
-        warnings.warn(
-            "complete_structured is deprecated, use complete_with_tools instead",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return {"result": "stub"}
-
 
 def _anthropic_to_openai_tools(
     anthropic_tools: list[dict[str, Any]],
@@ -502,4 +483,3 @@ def _anthropic_to_openai_tools(
 ProviderFactory.register("openai", OpenAIProvider)
 ProviderFactory.register("anthropic", AnthropicProvider)
 ProviderFactory.register("deepseek", DeepSeekProvider)
-ProviderFactory.register("local", LocalProvider)

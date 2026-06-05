@@ -46,7 +46,7 @@ class ParseError(ToolError):
     """Tool output parsing error."""
 
 
-class MemoryError(AgentError):
+class AgentMemoryError(AgentError):
     """Memory operation error."""
 
     def __init__(

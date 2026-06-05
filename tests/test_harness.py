@@ -98,11 +98,11 @@ class TestABC:
 # --- Factory tests ---
 
 class TestProviderFactory:
-    def test_create_local_provider(self):
+    def test_create_openai_provider(self):
         from open_agent.config import ModelConfig
         from open_agent.model import ProviderFactory
 
-        cfg = ModelConfig(provider="local")
+        cfg = ModelConfig(provider="openai")
         provider = ProviderFactory.create(cfg)
         assert provider is not None
 
@@ -117,8 +117,8 @@ class TestProviderFactory:
         from open_agent.model import ProviderFactory
 
         providers = ProviderFactory.available()
-        assert "local" in providers
         assert "openai" in providers
+        assert "anthropic" in providers
 
 
 # --- Registry tests ---

@@ -1,0 +1,15 @@
+{
+  "01-ghost-exports-and-naming-fixes": "doing",
+  "02-sandbox-async-and-lifecycle-fix": "pending",
+  "03-memory-tracing-wiring": "pending",
+  "04-complete-structured-migration": "pending",
+  "05-output-validation-empty-output-fix": "pending",
+  "06-sqlite-concurrency-and-encapsulation": "pending",
+  "07-skill-cli-wiring": "pending",
+  "08-recovery-dead-paths-cleanup": "pending",
+  "09-silent-exception-tiered-logging": "pending",
+  "10-dead-code-and-duplicate-cleanup": "pending",
+  "11-cli-token-usage-display": "pending",
+  "12-docs-and-deprecation-updates": "pending",
+  "13-test-infrastructure": "pending"
+}
