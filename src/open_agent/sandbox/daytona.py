@@ -67,8 +67,11 @@ class DaytonaSandbox(BaseComponent):
         """
         if not self._workspace:
             return {"success": False, "error": "Sandbox not started"}
-        content = self._workspace.fs.read_file(path)
-        return {"success": True, "content": content}
+        try:
+            content = await asyncio.to_thread(self._workspace.fs.read_file, path)
+            return {"success": True, "content": content}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     @tool_schema(name="sandbox_write_file")
     async def write_file(self, path: str, content: str) -> dict[str, Any]:
@@ -79,16 +82,22 @@ class DaytonaSandbox(BaseComponent):
         """
         if not self._workspace:
             return {"success": False, "error": "Sandbox not started"}
-        self._workspace.fs.write_file(path, content)
-        return {"success": True}
+        try:
+            await asyncio.to_thread(self._workspace.fs.write_file, path, content)
+            return {"success": True}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     @tool_schema(name="sandbox_snapshot")
     async def snapshot(self) -> dict[str, Any]:
         """Create sandbox snapshot for later restore."""
         if not self._workspace:
             return {"success": False, "error": "Sandbox not started"}
-        snapshot_id = self._workspace.create_snapshot()
-        return {"success": True, "snapshot_id": snapshot_id}
+        try:
+            snapshot_id = await asyncio.to_thread(self._workspace.create_snapshot)
+            return {"success": True, "snapshot_id": snapshot_id}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     @tool_schema(name="sandbox_restore")
     async def restore(self, snapshot_id: str) -> dict[str, Any]:
@@ -98,5 +107,8 @@ class DaytonaSandbox(BaseComponent):
         """
         if not self._workspace:
             return {"success": False, "error": "Sandbox not started"}
-        self._workspace.restore_snapshot(snapshot_id)
-        return {"success": True}
+        try:
+            await asyncio.to_thread(self._workspace.restore_snapshot, snapshot_id)
+            return {"success": True}
+        except Exception as e:
+            return {"success": False, "error": str(e)}

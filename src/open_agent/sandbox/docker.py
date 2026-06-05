@@ -56,11 +56,15 @@ class DockerSandbox(BaseComponent):
         try:
             effective_timeout = min(timeout, self.auto_timeout)
 
-            async def _docker_exec():
+            def _docker_exec():
                 exit_code, output = self._container.exec_run(cmd=["bash", "-c", command])
-                return {"success": exit_code == 0, "exit_code": exit_code, "output": output.decode(errors="replace")}
+                return exit_code, output
 
-            return await asyncio.wait_for(_docker_exec(), timeout=effective_timeout)
+            exit_code, output = await asyncio.wait_for(
+                asyncio.to_thread(_docker_exec),
+                timeout=effective_timeout,
+            )
+            return {"success": exit_code == 0, "exit_code": exit_code, "output": output.decode(errors="replace")}
         except asyncio.TimeoutError:
             raise asyncio.TimeoutError(f"Sandbox execution timed out after {effective_timeout}s")
         except Exception as e:
@@ -73,11 +77,15 @@ class DockerSandbox(BaseComponent):
         try:
             import tarfile
             import io
-            bits, stat = self._container.get_archive(path)
-            tar_stream = io.BytesIO(b"".join(bits))
-            tar = tarfile.open(fileobj=tar_stream)
-            member = tar.getmembers()[0]
-            content = tar.extractfile(member).read().decode()
+
+            def _read():
+                bits, stat = self._container.get_archive(path)
+                tar_stream = io.BytesIO(b"".join(bits))
+                tar = tarfile.open(fileobj=tar_stream)
+                member = tar.getmembers()[0]
+                return tar.extractfile(member).read().decode()
+
+            content = await asyncio.to_thread(_read)
             return {"success": True, "content": content}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -102,7 +110,7 @@ class DockerSandbox(BaseComponent):
                 tar.addfile(info, _io.BytesIO(data))
             buf.seek(0)
 
-            self._container.put_archive(parent, buf)
+            await asyncio.to_thread(self._container.put_archive, parent, buf)
             return {"success": True}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -112,7 +120,7 @@ class DockerSandbox(BaseComponent):
         if not self._container:
             return {"success": False, "error": "Sandbox not started"}
         try:
-            image = self._container.commit()
+            image = await asyncio.to_thread(self._container.commit)
             return {"success": True, "snapshot_id": image.id}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -124,7 +132,7 @@ class DockerSandbox(BaseComponent):
         try:
             # Check snapshot exists
             try:
-                self._client.images.get(snapshot_id)
+                await asyncio.to_thread(self._client.images.get, snapshot_id)
             except Exception:
                 return {"success": False, "error": f"Snapshot {snapshot_id} not found"}
 
@@ -134,14 +142,15 @@ class DockerSandbox(BaseComponent):
 
             if old_container:
                 try:
-                    old_container.stop(timeout=5)
-                    old_container.remove()
+                    await asyncio.to_thread(old_container.stop, timeout=5)
+                    await asyncio.to_thread(old_container.remove)
                 except Exception:
                     pass
 
             # Create new container from snapshot image
             try:
-                self._container = self._client.containers.run(
+                self._container = await asyncio.to_thread(
+                    self._client.containers.run,
                     snapshot_id,
                     command="tail -f /dev/null",
                     detach=True,
@@ -155,7 +164,9 @@ class DockerSandbox(BaseComponent):
 
             # Verify new container is working
             try:
-                exit_code, output = self._container.exec_run(cmd="echo ok")
+                exit_code, output = await asyncio.to_thread(
+                    self._container.exec_run, cmd="echo ok"
+                )
                 if exit_code != 0:
                     return {"success": False, "error": f"Container verification failed: {output.decode(errors='replace')}"}
             except Exception as e:
