@@ -608,7 +608,6 @@ class TestRuntimeMCPIntegration:
             mock_provider.on_start = AsyncMock()
             mock_provider.complete_with_tools = AsyncMock(return_value=MagicMock())
             mock_provider.complete = AsyncMock(return_value="test")
-            mock_provider.complete_structured = AsyncMock(return_value={})
             mock_factory.return_value = mock_provider
 
             from open_agent.runtime import AgentRuntime

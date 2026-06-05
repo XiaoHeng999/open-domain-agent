@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from open_agent.model import parse_json_response
+
 
 @dataclass
 class JudgeScore:
@@ -42,10 +44,8 @@ class LLMJudge:
         ]
 
         try:
-            result = await self._provider.complete_structured(
-                messages,
-                schema={"score": "integer", "reasoning": "string"},
-            )
+            response = await self._provider.complete_with_tools(messages, [])
+            result = parse_json_response(response.text)
             return JudgeScore(
                 score=float(result.get("score", 3)),
                 reasoning=result.get("reasoning", ""),

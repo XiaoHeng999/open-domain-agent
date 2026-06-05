@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import pytest
 
 from open_agent.config import AgentConfig, CheckpointConfig
@@ -23,16 +24,21 @@ from open_agent.skills.registry import SkillRegistry, scan_builtin_skills
 from open_agent.monitoring.collector import AnomalyDetector, QualityScorer
 from open_agent.memory.factory import MemoryFactory
 from open_agent.memory.working import WorkingMemory
+from open_agent.types import ToolCallResponse
 from unittest.mock import AsyncMock
+
+
+def _json_response(data: dict) -> ToolCallResponse:
+    return ToolCallResponse(text=json.dumps(data))
 
 
 def _make_pipeline_provider():
     """Provider mock returning 3 sequential responses for Path B routing."""
     provider = AsyncMock()
-    provider.complete_structured = AsyncMock(side_effect=[
-        {"complexity": "simple", "confidence": 0.95, "reason": "test"},
-        {"domain": "general", "candidates": ["general"]},
-        {"intent": "general_query", "slots": {}, "missing_slots": []},
+    provider.complete_with_tools = AsyncMock(side_effect=[
+        _json_response({"complexity": "simple", "confidence": 0.95, "reason": "test"}),
+        _json_response({"domain": "general", "candidates": ["general"]}),
+        _json_response({"intent": "general_query", "slots": {}, "missing_slots": []}),
     ])
     return provider
 
@@ -96,10 +102,10 @@ class TestComplexTask:
         """Three-stage routing -> Planning -> ReAct."""
         registry = ToolRegistry()
         complex_provider = AsyncMock()
-        complex_provider.complete_structured = AsyncMock(side_effect=[
-            {"complexity": "complex", "confidence": 0.85, "reason": "multi-step"},
-            {"domain": "general", "candidates": ["general"]},
-            {"intent": "general_query", "slots": {}, "missing_slots": []},
+        complex_provider.complete_with_tools = AsyncMock(side_effect=[
+            _json_response({"complexity": "complex", "confidence": 0.85, "reason": "multi-step"}),
+            _json_response({"domain": "general", "candidates": ["general"]}),
+            _json_response({"intent": "general_query", "slots": {}, "missing_slots": []}),
         ])
         pipeline = RoutingPipeline(provider=complex_provider)
         loop = ReActLoop(tool_registry=registry, max_iterations=5)
@@ -237,7 +243,7 @@ class TestEvalSuite:
             {"intent": "general_query", "slots": {}, "missing_slots": []},
         ] * 12
         eval_provider = AsyncMock()
-        eval_provider.complete_structured = AsyncMock(side_effect=eval_responses)
+        eval_provider.complete_with_tools = AsyncMock(side_effect=[_json_response(r) for r in eval_responses])
         pipeline = RoutingPipeline(provider=eval_provider)
         test_set = [
             {"input": s.input, "expected_domain": s.domain}

@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from open_agent.base import BaseComponent
+from open_agent.model import parse_json_response
 
 
 @dataclass
@@ -75,10 +76,8 @@ class IntentParser(BaseComponent):
             {"role": "user", "content": user_input},
         ]
         try:
-            result = await self._provider.complete_structured(
-                messages,
-                schema={"intent": "string", "slots": "object", "missing_slots": "array"},
-            )
+            response = await self._provider.complete_with_tools(messages, [])
+            result = parse_json_response(response.text)
             return IntentResult(
                 intent=result.get("intent", "unknown"),
                 slots=result.get("slots", {}),

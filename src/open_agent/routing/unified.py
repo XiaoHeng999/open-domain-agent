@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from open_agent.base import BaseComponent
+from open_agent.model import parse_json_response
 
 logger = logging.getLogger("open_agent")
 
@@ -112,19 +113,8 @@ class UnifiedLLMRouter(BaseComponent):
         if history:
             messages.extend(history)
         messages.append({"role": "user", "content": user_input})
-        result = await self._provider.complete_structured(
-            messages,
-            schema={
-                "complexity": "string",
-                "confidence": "number",
-                "domain": "string",
-                "domain_candidates": "array",
-                "intent": "string",
-                "slots": "object",
-                "missing_slots": "array",
-                "reason": "string",
-            },
-        )
+        response = await self._provider.complete_with_tools(messages, [])
+        result = parse_json_response(response.text)
         return self._parse_result(result)
 
     @staticmethod

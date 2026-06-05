@@ -127,26 +127,3 @@ class TestOpenAIProviderTools:
         assert result.text == "The answer is 42"
         assert result.tool_calls == []
         assert result.stop_reason == "end_turn"
-
-
-class TestDeprecationWarning:
-    @pytest.mark.asyncio
-    async def test_complete_structured_warns(self):
-        from open_agent.model import OpenAIProvider
-        from open_agent.config import ModelConfig
-
-        provider = OpenAIProvider(ModelConfig(provider="openai", name="gpt-4o"))
-        provider._client = MagicMock()
-
-        message = MagicMock()
-        message.content = '{"result": "ok"}'
-        choice = MagicMock()
-        choice.message = message
-        mock_response = MagicMock()
-        mock_response.choices = [choice]
-        provider._client.chat.completions.create = AsyncMock(return_value=mock_response)
-
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            result = await provider.complete_structured([], {})
-            assert any("deprecated" in str(warning.message).lower() for warning in w)

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from open_agent.routing.unified import UnifiedLLMRouter, UnifiedRoutingResult
 from open_agent.routing.router import RoutingPipeline, RoutingDecision, RoutingTraceData
 from open_agent.routing.domain import _DOMAINS
+from open_agent.types import ToolCallResponse
 
 
 # ---------------------------------------------------------------------------
@@ -15,7 +18,7 @@ from open_agent.routing.domain import _DOMAINS
 
 
 class _MockProvider:
-    """Minimal async mock that satisfies complete_structured."""
+    """Minimal async mock that satisfies complete_with_tools."""
 
     def __init__(
         self,
@@ -32,16 +35,19 @@ class _MockProvider:
         self._call_count = 0
         self.last_messages: list[dict] | None = None
 
-    async def complete_structured(self, messages, schema=None, **kw):
+    async def complete_with_tools(self, messages, tools=None, **kw):
         self.last_messages = messages
         self._call_count += 1
         if self._should_fail or (self._fail_count > 0 and self._call_count <= self._fail_count):
             raise RuntimeError("LLM call failed")
+        data = None
         if self._side_effect:
             idx = self._call_count - 1
             if idx < len(self._side_effect):
-                return self._side_effect[idx]
-        return self._response
+                data = self._side_effect[idx]
+        if data is None:
+            data = self._response
+        return ToolCallResponse(text=json.dumps(data))
 
 
 # ---------------------------------------------------------------------------

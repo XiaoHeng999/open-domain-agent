@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from open_agent.trace import Span, SpanKind, Trace
+from open_agent.model import parse_json_response
 
 logger = logging.getLogger("open_agent")
 
@@ -85,10 +86,8 @@ class PlanGenerator:
             },
             {"role": "user", "content": user_input},
         ]
-        result = await self._provider.complete_structured(
-            messages,
-            schema={"goal": "string", "steps": "array"},
-        )
+        response = await self._provider.complete_with_tools(messages, [])
+        result = parse_json_response(response.text)
         return Plan(
             goal=result.get("goal", user_input),
             steps=result.get("steps", []),

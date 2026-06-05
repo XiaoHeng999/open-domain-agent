@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -11,12 +12,18 @@ from open_agent.routing.domain import DomainRouter, DomainRouteResult
 from open_agent.routing.intent import IntentParser, IntentResult
 from open_agent.routing.router import RoutingPipeline, RoutingDecision
 from open_agent.routing.unified import UnifiedLLMRouter, UnifiedRoutingResult
+from open_agent.types import ToolCallResponse
+
+
+def _mock_response(data: dict) -> ToolCallResponse:
+    """Helper: wrap a dict as a ToolCallResponse with JSON text."""
+    return ToolCallResponse(text=json.dumps(data))
 
 
 class TestComplexityJudge:
     def _make_provider(self, response: dict):
         provider = AsyncMock()
-        provider.complete_structured = AsyncMock(return_value=response)
+        provider.complete_with_tools = AsyncMock(return_value=_mock_response(response))
         return provider
 
     @pytest.mark.asyncio
@@ -140,10 +147,10 @@ class TestIntentParser:
 class TestRoutingPipeline:
     def _make_pipeline_provider(self, complexity_resp=None, domain_resp=None, intent_resp=None):
         provider = AsyncMock()
-        provider.complete_structured = AsyncMock(side_effect=[
-            complexity_resp or {"complexity": "simple", "confidence": 0.95, "reason": "test"},
-            domain_resp or {"domain": "general", "candidates": ["general"]},
-            intent_resp or {"intent": "general_query", "slots": {}, "missing_slots": []},
+        provider.complete_with_tools = AsyncMock(side_effect=[
+            _mock_response(complexity_resp or {"complexity": "simple", "confidence": 0.95, "reason": "test"}),
+            _mock_response(domain_resp or {"domain": "general", "candidates": ["general"]}),
+            _mock_response(intent_resp or {"intent": "general_query", "slots": {}, "missing_slots": []}),
         ])
         return provider
 
@@ -181,10 +188,10 @@ class TestRoutingPipeline:
     @pytest.mark.asyncio
     async def test_evaluate(self):
         provider = AsyncMock()
-        provider.complete_structured = AsyncMock(side_effect=[
-            {"complexity": "simple", "confidence": 0.95, "reason": "test"},
-            {"domain": "general", "candidates": ["general"]},
-            {"intent": "general_query", "slots": {}, "missing_slots": []},
+        provider.complete_with_tools = AsyncMock(side_effect=[
+            _mock_response({"complexity": "simple", "confidence": 0.95, "reason": "test"}),
+            _mock_response({"domain": "general", "candidates": ["general"]}),
+            _mock_response({"intent": "general_query", "slots": {}, "missing_slots": []}),
         ])
         pipeline = RoutingPipeline(provider=provider)
         test_set = [
@@ -200,7 +207,7 @@ class TestUnifiedLLMRouterHistory:
 
     def _make_router(self):
         provider = AsyncMock()
-        provider.complete_structured = AsyncMock(return_value={
+        provider.complete_with_tools = AsyncMock(return_value=_mock_response({
             "complexity": "simple",
             "confidence": 0.9,
             "domain": "general",
@@ -209,7 +216,7 @@ class TestUnifiedLLMRouterHistory:
             "slots": {"base_number": 4, "increment": 100},
             "missing_slots": [],
             "reason": "User wants to add 100 to the previous result of 4",
-        })
+        }))
         router = UnifiedLLMRouter(provider=provider, domains={})
         return router, provider
 
@@ -222,7 +229,7 @@ class TestUnifiedLLMRouterHistory:
         ]
         await router.route("再加100等于几？", history=history)
 
-        call_args = provider.complete_structured.call_args
+        call_args = provider.complete_with_tools.call_args
         messages = call_args[0][0]
         # system, history[0], history[1], user_input
         assert len(messages) == 4
@@ -237,7 +244,7 @@ class TestUnifiedLLMRouterHistory:
         router, provider = self._make_router()
         await router.route("hello")
 
-        call_args = provider.complete_structured.call_args
+        call_args = provider.complete_with_tools.call_args
         messages = call_args[0][0]
         assert len(messages) == 2
         assert messages[0]["role"] == "system"
@@ -248,7 +255,7 @@ class TestUnifiedLLMRouterHistory:
         router, provider = self._make_router()
         await router.route("hello", history=[])
 
-        call_args = provider.complete_structured.call_args
+        call_args = provider.complete_with_tools.call_args
         messages = call_args[0][0]
         assert len(messages) == 2
 
@@ -259,7 +266,7 @@ class TestRoutingPipelineHistoryPassthrough:
     @pytest.mark.asyncio
     async def test_unified_path_receives_history(self):
         provider = AsyncMock()
-        provider.complete_structured = AsyncMock(return_value={
+        provider.complete_with_tools = AsyncMock(return_value=_mock_response({
             "complexity": "simple",
             "confidence": 0.9,
             "domain": "general",
@@ -268,7 +275,7 @@ class TestRoutingPipelineHistoryPassthrough:
             "slots": {},
             "missing_slots": [],
             "reason": "test",
-        })
+        }))
         pipeline = RoutingPipeline(routing_provider=provider)
 
         history = [
@@ -279,7 +286,7 @@ class TestRoutingPipelineHistoryPassthrough:
         assert decision.method == "llm"
 
         # Verify the provider received the history in messages
-        call_args = provider.complete_structured.call_args
+        call_args = provider.complete_with_tools.call_args
         messages = call_args[0][0]
         assert len(messages) == 4  # system + 2 history + user
         assert messages[1]["content"] == "2+2等于几？"
@@ -287,10 +294,10 @@ class TestRoutingPipelineHistoryPassthrough:
     @pytest.mark.asyncio
     async def test_stages_path_no_history(self):
         provider = AsyncMock()
-        provider.complete_structured = AsyncMock(side_effect=[
-            {"complexity": "simple", "confidence": 0.95, "reason": "test"},
-            {"domain": "general", "candidates": ["general"]},
-            {"intent": "general_query", "slots": {}, "missing_slots": []},
+        provider.complete_with_tools = AsyncMock(side_effect=[
+            _mock_response({"complexity": "simple", "confidence": 0.95, "reason": "test"}),
+            _mock_response({"domain": "general", "candidates": ["general"]}),
+            _mock_response({"intent": "general_query", "slots": {}, "missing_slots": []}),
         ])
         pipeline = RoutingPipeline(provider=provider)  # no routing_provider → three-stage path
         history = [{"role": "user", "content": "past"}]
@@ -301,7 +308,7 @@ class TestRoutingPipelineHistoryPassthrough:
     @pytest.mark.asyncio
     async def test_no_history_default(self):
         provider = AsyncMock()
-        provider.complete_structured = AsyncMock(return_value={
+        provider.complete_with_tools = AsyncMock(return_value=_mock_response({
             "complexity": "simple",
             "confidence": 0.95,
             "domain": "general",
@@ -310,13 +317,13 @@ class TestRoutingPipelineHistoryPassthrough:
             "slots": {},
             "missing_slots": [],
             "reason": "greeting",
-        })
+        }))
         pipeline = RoutingPipeline(routing_provider=provider)
 
         decision = await pipeline.route("hello")
         assert decision.method == "llm"
 
-        call_args = provider.complete_structured.call_args
+        call_args = provider.complete_with_tools.call_args
         messages = call_args[0][0]
         assert len(messages) == 2  # system + user only
 
@@ -331,7 +338,7 @@ class TestMultiTurnRoutingIntegration:
         provider = AsyncMock()
         # First call: simple math question
         # Second call: follow-up with context
-        provider.complete_structured = AsyncMock(return_value={
+        provider.complete_with_tools = AsyncMock(return_value=_mock_response({
             "complexity": "simple",
             "confidence": 0.92,
             "domain": "general",
@@ -340,7 +347,7 @@ class TestMultiTurnRoutingIntegration:
             "slots": {"base_number": 4, "increment": 100},
             "missing_slots": [],
             "reason": "User wants to add 100 to previous result of 4, inferred from history",
-        })
+        }))
         pipeline = RoutingPipeline(routing_provider=provider)
 
         history = [
@@ -359,7 +366,7 @@ class TestMultiTurnRoutingIntegration:
     async def test_no_history_triggers_missing_slots(self):
         """Same follow-up without history should report missing_slots."""
         provider = AsyncMock()
-        provider.complete_structured = AsyncMock(return_value={
+        provider.complete_with_tools = AsyncMock(return_value=_mock_response({
             "complexity": "simple",
             "confidence": 0.85,
             "domain": "general",
@@ -368,7 +375,7 @@ class TestMultiTurnRoutingIntegration:
             "slots": {},
             "missing_slots": ["base_number"],
             "reason": "No context, base_number is unknown",
-        })
+        }))
         pipeline = RoutingPipeline(routing_provider=provider)
 
         decision = await pipeline.route("再加100等于几？")
@@ -523,11 +530,10 @@ class TestTemperatureEnforcement:
     """Test 4.5: Verify temperature=0.0 in router calls."""
 
     @pytest.mark.asyncio
-    async def test_router_uses_complete_structured(self):
-        """UnifiedLLMRouter uses complete_structured which forces temperature=0.0."""
-        import warnings
+    async def test_router_uses_complete_with_tools(self):
+        """UnifiedLLMRouter uses complete_with_tools for routing."""
         provider = AsyncMock()
-        provider.complete_structured = AsyncMock(return_value={
+        provider.complete_with_tools = AsyncMock(return_value=_mock_response({
             "complexity": "simple",
             "confidence": 0.9,
             "domain": "general",
@@ -536,22 +542,18 @@ class TestTemperatureEnforcement:
             "slots": {},
             "missing_slots": [],
             "reason": "test",
-        })
+        }))
         router = UnifiedLLMRouter(provider=provider, domains={})
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            result = await router.route("hello")
+        result = await router.route("hello")
 
-        # Verify complete_structured was called (it hardcodes temperature=0.0)
-        provider.complete_structured.assert_called_once()
+        provider.complete_with_tools.assert_called_once()
         assert result.complexity == "simple"
 
     @pytest.mark.asyncio
     async def test_deterministic_routing(self):
-        """Same input should produce same result through complete_structured."""
-        import warnings
-        fixed_result = {
+        """Same input should produce same result through complete_with_tools."""
+        fixed_result = _mock_response({
             "complexity": "medium",
             "confidence": 0.88,
             "domain": "coding",
@@ -560,20 +562,18 @@ class TestTemperatureEnforcement:
             "slots": {"task": "等差数列求和"},
             "missing_slots": [],
             "reason": "Code generation task",
-        }
+        })
         provider = AsyncMock()
-        provider.complete_structured = AsyncMock(return_value=fixed_result)
+        provider.complete_with_tools = AsyncMock(return_value=fixed_result)
         router = UnifiedLLMRouter(provider=provider, domains={})
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            r1 = await router.route("帮我创建一个等差数列求和公式的代码")
-            r2 = await router.route("帮我创建一个等差数列求和公式的代码")
-            r3 = await router.route("帮我创建一个等差数列求和公式的代码")
+        r1 = await router.route("帮我创建一个等差数列求和公式的代码")
+        r2 = await router.route("帮我创建一个等差数列求和公式的代码")
+        r3 = await router.route("帮我创建一个等差数列求和公式的代码")
 
         assert r1.missing_slots == r2.missing_slots == r3.missing_slots == []
         assert r1.domain == r2.domain == r3.domain == "coding"
-        assert provider.complete_structured.call_count == 3
+        assert provider.complete_with_tools.call_count == 3
 
 
 class TestDomainRouterLLM:
@@ -581,7 +581,7 @@ class TestDomainRouterLLM:
 
     def _make_provider(self, response: dict):
         provider = AsyncMock()
-        provider.complete_structured = AsyncMock(return_value=response)
+        provider.complete_with_tools = AsyncMock(return_value=_mock_response(response))
         return provider
 
     @pytest.mark.asyncio
@@ -612,7 +612,7 @@ class TestDomainRouterLLM:
     async def test_llm_failure_raises_routing_error(self):
         from open_agent.errors import RoutingError
         provider = AsyncMock()
-        provider.complete_structured = AsyncMock(side_effect=RuntimeError("LLM failed"))
+        provider.complete_with_tools = AsyncMock(side_effect=RuntimeError("LLM failed"))
         router = DomainRouter(provider=provider)
         with pytest.raises(RoutingError):
             await router.route("test")

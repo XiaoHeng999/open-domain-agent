@@ -8,6 +8,7 @@ from typing import Any
 
 from open_agent.base import BaseComponent
 from open_agent.errors import RoutingError
+from open_agent.model import parse_json_response
 
 logger = logging.getLogger("open_agent")
 
@@ -134,10 +135,8 @@ class DomainRouter(BaseComponent):
             {"role": "user", "content": user_input},
         ]
         try:
-            result = await self._provider.complete_structured(
-                messages,
-                schema={"domain": "string", "candidates": "array"},
-            )
+            response = await self._provider.complete_with_tools(messages, [])
+            result = parse_json_response(response.text)
         except Exception as exc:
             raise RoutingError(f"LLM domain routing failed: {exc}") from exc
 

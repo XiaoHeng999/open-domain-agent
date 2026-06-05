@@ -69,12 +69,6 @@ class ModelProvider(BaseComponent, ABC):
     async def complete(self, messages: list[dict[str, Any]], **kwargs: Any) -> str:
         ...
 
-    @abstractmethod
-    async def complete_structured(
-        self, messages: list[dict[str, Any]], schema: dict[str, Any], **kwargs: Any
-    ) -> dict[str, Any]:
-        ...
-
     async def complete_with_tools(
         self,
         messages: list[dict[str, Any]],

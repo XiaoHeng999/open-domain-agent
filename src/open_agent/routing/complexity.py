@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from open_agent.base import BaseComponent
+from open_agent.model import parse_json_response
 
 _VALID_COMPLEXITIES = {"simple", "medium", "complex"}
 
@@ -40,10 +41,8 @@ class LLMComplexityJudge(BaseComponent):
             {"role": "system", "content": self._SYSTEM_PROMPT},
             {"role": "user", "content": user_input},
         ]
-        result = await self._provider.complete_structured(
-            messages,
-            schema={"complexity": "string", "confidence": "number", "reason": "string"},
-        )
+        response = await self._provider.complete_with_tools(messages, [])
+        result = parse_json_response(response.text)
         complexity = result.get("complexity", "simple")
         if complexity not in _VALID_COMPLEXITIES:
             complexity = "simple"

@@ -20,6 +20,7 @@ from typing import Any
 
 from open_agent.checkpoint.manager import ExecutionState
 from open_agent.errors import AgentError, ToolError
+from open_agent.model import parse_json_response
 from open_agent.registry import ToolRegistry
 from open_agent.routing.router import RoutingDecision
 from open_agent.trace import Span, SpanKind, Trace
@@ -541,11 +542,11 @@ class ReActLoop:
                     # No tool call — LLM gave direct answer
                     actions = []
             else:
-                # Fallback to complete_structured for providers without tool_use
-                raw = await self._provider.complete_structured(
-                    messages,
-                    schema=self._legacy_tool_schema(),
+                # Fallback to complete_with_tools for providers without tool_use
+                fallback_response = await self._provider.complete_with_tools(
+                    messages, [],
                 )
+                raw = parse_json_response(fallback_response.text)
                 thought_content = raw.get("thought", "")
                 tool_name = raw.get("tool_name", "")
                 args = raw.get("args", {})

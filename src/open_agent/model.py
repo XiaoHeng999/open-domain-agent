@@ -47,6 +47,26 @@ except ImportError:
 logger = logging.getLogger("open_agent")
 
 
+def parse_json_response(text: str) -> dict[str, Any]:
+    """Parse JSON from an LLM text response, stripping markdown fences."""
+    text = re.sub(r"^```(?:json)?\s*", "", text.strip())
+    text = re.sub(r"\s*```$", "", text)
+    text = re.sub(r",\s*([}\]])", r"\1", text)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        for start_ch, end_ch in [("{", "}"), ("[", "]")]:
+            start = text.find(start_ch)
+            if start != -1:
+                end = text.rfind(end_ch)
+                if end > start:
+                    try:
+                        return json.loads(text[start : end + 1])
+                    except json.JSONDecodeError:
+                        continue
+        raise
+
+
 class ProviderFactory:
     """Create LLM provider instances from config."""
 
@@ -104,38 +124,6 @@ class OpenAIProvider(ModelProvider):
             max_tokens=kwargs.get("max_tokens", self.config.max_tokens),
         )
         return response.choices[0].message.content or ""
-
-    async def complete_structured(
-        self, messages: list[dict[str, Any]], schema: dict[str, Any], **kwargs: Any
-    ) -> dict[str, Any]:
-        warnings.warn(
-            "complete_structured is deprecated, use complete_with_tools instead",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        response = await self._openai_create(
-            model=self.config.name,
-            messages=messages,
-            temperature=0.0,
-            response_format={"type": "json_object"},
-        )
-        text = response.choices[0].message.content or ""
-        text = re.sub(r"^```(?:json)?\s*", "", text.strip())
-        text = re.sub(r"\s*```$", "", text)
-        text = re.sub(r",\s*([}\]])", r"\1", text)
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            for start_ch, end_ch in [("{", "}"), ("[", "]")]:
-                start = text.find(start_ch)
-                if start != -1:
-                    end = text.rfind(end_ch)
-                    if end > start:
-                        try:
-                            return json.loads(text[start : end + 1])
-                        except json.JSONDecodeError:
-                            continue
-            raise
 
     async def complete_with_tools(
         self,
@@ -303,20 +291,6 @@ class AnthropicProvider(ModelProvider):
             messages=user_messages,
         )
         return response.content[0].text if response.content else ""
-
-    async def complete_structured(
-        self, messages: list[dict[str, Any]], schema: dict[str, Any], **kwargs: Any
-    ) -> dict[str, Any]:
-        warnings.warn(
-            "complete_structured is deprecated, use complete_with_tools instead",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        text = await self.complete(
-            messages + [{"role": "user", "content": "Respond in valid JSON."}],
-            **kwargs,
-        )
-        return json.loads(text)
 
     async def complete_with_tools(
         self,
