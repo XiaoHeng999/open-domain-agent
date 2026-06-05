@@ -30,8 +30,6 @@ class ReadFileTool(Tool):
     output_schema: dict[str, Any] | None = None
 
     def validate_output(self, result: str) -> list[str]:
-        if not result or not result.strip():
-            return ["File is empty or could not be read"]
         return []
 
     def __init__(self, workspace: str = ".") -> None:

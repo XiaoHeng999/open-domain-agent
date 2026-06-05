@@ -13,8 +13,6 @@ class ExecTool(Tool):
     output_schema: dict[str, Any] | None = None
 
     def validate_output(self, result: str) -> list[str]:
-        if not result or not result.strip():
-            return ["Command returned empty output"]
         return []
 
     def __init__(
