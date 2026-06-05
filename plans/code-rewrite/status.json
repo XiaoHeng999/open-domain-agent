@@ -1,7 +1,7 @@
 {
   "01-ghost-exports-and-naming-fixes": "done",
-  "02-sandbox-async-and-lifecycle-fix": "doing",
-  "03-memory-tracing-wiring": "pending",
+  "02-sandbox-async-and-lifecycle-fix": "done",
+  "03-memory-tracing-wiring": "doing",
   "04-complete-structured-migration": "pending",
   "05-output-validation-empty-output-fix": "pending",
   "06-sqlite-concurrency-and-encapsulation": "pending",

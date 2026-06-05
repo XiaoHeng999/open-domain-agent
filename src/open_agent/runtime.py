@@ -199,6 +199,11 @@ class AgentRuntime(BaseComponent):
         )
 
         # Wire memory + todo into ReActLoop
+        # Inject trace manager into all memory instances for span creation
+        for mem in (self._runtime_memory, self._profile_memory,
+                    self._retrieval_memory, self._archive_memory):
+            if mem is not None:
+                mem._trace_manager = self.trace_manager
         self.react_loop._registry = self.tool_registry
         self.react_loop._runtime_memory = self._runtime_memory
         self.react_loop._todo_manager = self._todo_manager
@@ -363,6 +368,12 @@ class AgentRuntime(BaseComponent):
 
         # Create trace
         trace = self.trace_manager.create_trace(metadata={"user_input": user_input})
+
+        # Propagate trace ID to all memory instances so span helpers work
+        for mem in (self._runtime_memory, self._profile_memory,
+                    self._retrieval_memory, self._archive_memory):
+            if mem is not None:
+                mem._current_trace_id = trace.trace_id
 
         # Archive: record user message
         if self._archive_memory:
