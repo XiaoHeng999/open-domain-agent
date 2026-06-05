@@ -23,6 +23,18 @@ from open_agent.skills.registry import SkillRegistry, scan_builtin_skills
 from open_agent.monitoring.collector import AnomalyDetector, QualityScorer
 from open_agent.memory.factory import MemoryFactory
 from open_agent.memory.working import WorkingMemory
+from unittest.mock import AsyncMock
+
+
+def _make_pipeline_provider():
+    """Provider mock returning 3 sequential responses for Path B routing."""
+    provider = AsyncMock()
+    provider.complete_structured = AsyncMock(side_effect=[
+        {"complexity": "simple", "confidence": 0.95, "reason": "test"},
+        {"domain": "general", "candidates": ["general"]},
+        {"intent": "general_query", "slots": {}, "missing_slots": []},
+    ])
+    return provider
 
 
 # --- 12.2: Minimal runnable example ---
@@ -32,7 +44,7 @@ class TestMinimalRun:
     async def test_hello_task(self):
         """CLI `agent run "hello"` -> route -> ReAct -> return."""
         registry = ToolRegistry()
-        pipeline = RoutingPipeline()
+        pipeline = RoutingPipeline(provider=_make_pipeline_provider())
         loop = ReActLoop(tool_registry=registry, max_iterations=3)
 
         decision = await pipeline.route("hello")
@@ -65,7 +77,7 @@ class TestMinimalRun:
             handler=greet,
         ))
 
-        pipeline = RoutingPipeline()
+        pipeline = RoutingPipeline(provider=_make_pipeline_provider())
         decision = await pipeline.route("greet John")
         loop = ReActLoop(tool_registry=registry, max_iterations=3)
 
@@ -83,7 +95,13 @@ class TestComplexTask:
     async def test_complex_routing_and_plan(self):
         """Three-stage routing -> Planning -> ReAct."""
         registry = ToolRegistry()
-        pipeline = RoutingPipeline()
+        complex_provider = AsyncMock()
+        complex_provider.complete_structured = AsyncMock(side_effect=[
+            {"complexity": "complex", "confidence": 0.85, "reason": "multi-step"},
+            {"domain": "general", "candidates": ["general"]},
+            {"intent": "general_query", "slots": {}, "missing_slots": []},
+        ])
+        pipeline = RoutingPipeline(provider=complex_provider)
         loop = ReActLoop(tool_registry=registry, max_iterations=5)
 
         decision = await pipeline.route("搜索竞品A数据，搜索竞品B数据，对比分析，生成报告")
@@ -212,8 +230,15 @@ class TestEvalSuite:
         assert loaded is not None
         assert len(loaded.scenarios) >= 10
 
-        # Run routing eval
-        pipeline = RoutingPipeline()
+        # Run routing eval — need enough mock responses for 12 scenarios × 3 calls each
+        eval_responses = [
+            {"complexity": "simple", "confidence": 0.9, "reason": "test"},
+            {"domain": "general", "candidates": ["general"]},
+            {"intent": "general_query", "slots": {}, "missing_slots": []},
+        ] * 12
+        eval_provider = AsyncMock()
+        eval_provider.complete_structured = AsyncMock(side_effect=eval_responses)
+        pipeline = RoutingPipeline(provider=eval_provider)
         test_set = [
             {"input": s.input, "expected_domain": s.domain}
             for s in scenarios
@@ -231,7 +256,7 @@ class TestSmokeTest:
         # Setup
         trace_mgr = TraceManager()
         registry = ToolRegistry()
-        pipeline = RoutingPipeline()
+        pipeline = RoutingPipeline(provider=_make_pipeline_provider())
 
         @tool_schema(name="echo")
         def echo(text: str) -> str:

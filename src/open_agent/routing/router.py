@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from open_agent.base import BaseComponent
-from open_agent.routing.complexity import ComplexityResult, RuleBasedComplexityJudge, LLMComplexityJudge
+from open_agent.routing.complexity import ComplexityResult, LLMComplexityJudge
 from open_agent.routing.domain import DomainRouteResult, DomainRouter, _DOMAINS
 from open_agent.routing.intent import IntentResult, IntentParser
 from open_agent.routing.unified import UnifiedLLMRouter
@@ -30,7 +30,7 @@ class RoutingDecision:
     intent: IntentResult
     skip_planning: bool = False
     fast_path_confidence: float = 0.9
-    method: str = "rule"  # "llm" | "rule_fallback" | "rule"
+    method: str = "llm"  # "llm" | "llm_fallback"
 
 
 @dataclass
@@ -40,34 +40,33 @@ class RoutingTraceData:
     complexity_judge: dict[str, Any] = field(default_factory=dict)
     domain_router: dict[str, Any] = field(default_factory=dict)
     intent_parser: dict[str, Any] = field(default_factory=dict)
-    method: str = "rule"
+    method: str = "llm"
 
 
 class RoutingPipeline(BaseComponent):
     """Three-stage routing pipeline: Complexity → Domain → Intent.
 
     When a *routing_provider* is supplied, the unified LLM router is used
-    as the primary path.  On failure, the rule-based keyword pipeline serves
-    as fallback.  Without a provider the keyword pipeline runs directly.
+    as the primary path.  On failure, the keyword pipeline serves as fallback.
+    The complexity judge always uses LLM-based classification.
     """
 
     def __init__(
         self,
-        complexity_method: str = "rule",
         provider: Any = None,
         fast_path_confidence: float = 0.9,
         domains: list[str] | None = None,
         routing_provider: Any = None,
     ) -> None:
         super().__init__()
-        if complexity_method == "llm" and provider:
-            self._complexity_judge = LLMComplexityJudge(provider)
-        else:
-            self._complexity_judge = RuleBasedComplexityJudge()
+        effective_provider = provider or routing_provider
+        if effective_provider is None:
+            raise ValueError("RoutingPipeline requires a provider for LLM-based complexity judgment")
+        self._complexity_judge = LLMComplexityJudge(effective_provider)
 
         filtered = _filter_domains(domains) if domains else None
-        self._domain_router = DomainRouter(domains=filtered)
-        self._intent_parser = IntentParser(provider)
+        self._domain_router = DomainRouter(domains=filtered, provider=effective_provider)
+        self._intent_parser = IntentParser(effective_provider)
         self._fast_path_confidence = fast_path_confidence
         self._domains_dict = filtered
 
@@ -85,7 +84,7 @@ class RoutingPipeline(BaseComponent):
         trace: Trace | None = None,
         history: list[dict[str, str]] | None = None,
     ) -> RoutingDecision:
-        """Execute routing — unified LLM path or keyword fallback."""
+        """Execute routing — unified LLM path or three-stage LLM pipeline."""
         routing_span = None
         if trace:
             routing_span = trace.create_span("routing_pipeline", kind=SpanKind.ROUTING)
@@ -93,8 +92,8 @@ class RoutingPipeline(BaseComponent):
         if self._unified_router is not None:
             decision = await self._route_unified(user_input, routing_span, history=history)
         else:
-            decision = await self._route_keyword(user_input, routing_span)
-            decision.method = "rule"
+            decision = await self._route_stages(user_input, routing_span)
+            decision.method = "llm"
 
         if routing_span:
             routing_span.set_attribute("complexity", decision.complexity.complexity)
@@ -119,9 +118,9 @@ class RoutingPipeline(BaseComponent):
                 result.domain, result.complexity, result.intent, result.confidence,
             )
         except Exception:
-            logger.warning("Unified LLM router failed, falling back to keyword pipeline")
-            decision = await self._route_keyword(user_input, routing_span)
-            decision.method = "rule_fallback"
+            logger.warning("Unified LLM router failed, falling back to three-stage pipeline")
+            decision = await self._route_stages(user_input, routing_span)
+            decision.method = "llm_fallback"
             return decision
 
         complexity = ComplexityResult(
@@ -159,21 +158,18 @@ class RoutingPipeline(BaseComponent):
             method="llm",
         )
 
-    # -- keyword pipeline path -----------------------------------------------
+    # -- three-stage pipeline path -------------------------------------------
 
-    async def _route_keyword(
+    async def _route_stages(
         self, user_input: str, routing_span: Any,
     ) -> RoutingDecision:
-        if isinstance(self._complexity_judge, LLMComplexityJudge):
-            complexity = await self._complexity_judge.judge(user_input)
-        else:
-            complexity = self._complexity_judge.judge(user_input)
+        complexity = await self._complexity_judge.judge(user_input)
         logger.info(
             "routing.complexity complexity=%s confidence=%.2f method=%s",
             complexity.complexity, complexity.confidence, complexity.method,
         )
 
-        domain = self._domain_router.route(user_input)
+        domain = await self._domain_router.route(user_input)
         logger.info(
             "routing.domain domain=%s candidates=%s",
             domain.domain, domain.candidates,

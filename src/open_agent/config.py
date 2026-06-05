@@ -106,7 +106,6 @@ class SandboxConfig(BaseModel):
 class RoutingConfig(BaseModel):
     """Routing layer configuration."""
 
-    complexity_method: Literal["rule", "llm"] = "rule"
     domains: list[str] = Field(
         default_factory=lambda: ["coding", "search", "web", "general"]
     )

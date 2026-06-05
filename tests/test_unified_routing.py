@@ -17,15 +17,30 @@ from open_agent.routing.domain import _DOMAINS
 class _MockProvider:
     """Minimal async mock that satisfies complete_structured."""
 
-    def __init__(self, response: dict | None = None, *, should_fail: bool = False):
+    def __init__(
+        self,
+        response: dict | None = None,
+        *,
+        should_fail: bool = False,
+        fail_count: int = 0,
+        side_effect: list[dict] | None = None,
+    ):
         self._response = response
         self._should_fail = should_fail
+        self._fail_count = fail_count
+        self._side_effect = side_effect
+        self._call_count = 0
         self.last_messages: list[dict] | None = None
 
     async def complete_structured(self, messages, schema=None, **kw):
         self.last_messages = messages
-        if self._should_fail:
+        self._call_count += 1
+        if self._should_fail or (self._fail_count > 0 and self._call_count <= self._fail_count):
             raise RuntimeError("LLM call failed")
+        if self._side_effect:
+            idx = self._call_count - 1
+            if idx < len(self._side_effect):
+                return self._side_effect[idx]
         return self._response
 
 
@@ -121,13 +136,23 @@ class TestUnifiedLLMRouterFallback:
 
 class TestRoutingPipelineFallback:
     @pytest.mark.asyncio
-    async def test_llm_fallback_to_keyword(self):
-        """When unified LLM router fails, pipeline falls back to keyword."""
-        provider = _MockProvider(should_fail=True)
-        pipeline = RoutingPipeline(routing_provider=provider)
+    async def test_llm_fallback_to_stages(self):
+        """When unified LLM router fails, pipeline falls back to three-stage LLM path."""
+        # fail_count=1: first call (unified) fails.
+        # side_effect: call 1 is skipped (fails), calls 2-4 are the three-stage responses.
+        provider = _MockProvider(
+            side_effect=[
+                {},  # index 0 — skipped because fail_count=1 makes call 1 raise
+                {"complexity": "simple", "confidence": 0.9, "reason": "debug"},
+                {"domain": "coding", "candidates": ["coding"]},
+                {"intent": "debug_code", "slots": {}, "missing_slots": []},
+            ],
+            fail_count=1,
+        )
+        pipeline = RoutingPipeline(provider=provider, routing_provider=provider)
         decision = await pipeline.route("debug python code")
         assert decision.domain.domain == "coding"
-        assert decision.method == "rule_fallback"
+        assert decision.method == "llm_fallback"
 
     @pytest.mark.asyncio
     async def test_llm_success_path(self):
@@ -149,18 +174,28 @@ class TestRoutingPipelineFallback:
         assert decision.domain.domain == "coding"
 
     @pytest.mark.asyncio
-    async def test_no_provider_uses_keyword(self):
-        pipeline = RoutingPipeline()
+    async def test_no_routing_provider_uses_stages(self):
+        provider = _MockProvider(side_effect=[
+            {"complexity": "simple", "confidence": 0.9, "reason": "test"},
+            {"domain": "coding", "candidates": ["coding"]},
+            {"intent": "debug_code", "slots": {}, "missing_slots": []},
+        ])
+        pipeline = RoutingPipeline(provider=provider)
         decision = await pipeline.route("debug python code")
-        assert decision.method == "rule"
+        assert decision.method == "llm"
         assert decision.domain.domain == "coding"
 
     @pytest.mark.asyncio
     async def test_trace_records_method(self):
-        pipeline = RoutingPipeline()
+        provider = _MockProvider(side_effect=[
+            {"complexity": "simple", "confidence": 0.9, "reason": "test"},
+            {"domain": "general", "candidates": ["general"]},
+            {"intent": "general_query", "slots": {}, "missing_slots": []},
+        ])
+        pipeline = RoutingPipeline(provider=provider)
         decision = await pipeline.route("hello")
         trace_data = pipeline.get_routing_trace(decision)
-        assert trace_data.method == "rule"
+        assert trace_data.method == "llm"
 
 
 # ---------------------------------------------------------------------------
@@ -189,11 +224,16 @@ class TestRoutingConfigIndependentModel:
         assert decision.domain.domain == "search"
 
     @pytest.mark.asyncio
-    async def test_routing_provider_reuse_main(self):
-        """Without routing_provider, main pipeline falls back to keyword."""
-        pipeline = RoutingPipeline()
+    async def test_provider_only_uses_stages(self):
+        """With provider only (no routing_provider), uses three-stage LLM path."""
+        provider = _MockProvider(side_effect=[
+            {"complexity": "simple", "confidence": 0.9, "reason": "test"},
+            {"domain": "general", "candidates": ["general"]},
+            {"intent": "debug_code", "slots": {}, "missing_slots": []},
+        ])
+        pipeline = RoutingPipeline(provider=provider)
         decision = await pipeline.route("debug my code")
-        assert decision.method == "rule"
+        assert decision.method == "llm"
 
 
 # ---------------------------------------------------------------------------
@@ -211,7 +251,7 @@ class TestDomainSystemPromptInjection:
 
         loop = ReActLoop(tool_registry=None, provider=None)
         routing_decision = RoutingDecision(
-            complexity=ComplexityResult(complexity="simple", confidence=0.95, method="rule"),
+            complexity=ComplexityResult(complexity="simple", confidence=0.95, method="llm"),
             domain=DomainRouteResult(
                 domain="coding",
                 candidates=["coding"],
@@ -237,14 +277,11 @@ class TestDomainSystemPromptInjection:
 class TestSkipPlanningControl:
     def test_simple_task_skips_planning(self):
         """Simple tasks with high confidence should skip planning."""
-        pipeline = RoutingPipeline(fast_path_confidence=0.9)
-        # Use a simple input that RuleBasedComplexityJudge classifies as simple
-        # We verify the skip_planning logic directly
         from open_agent.routing.complexity import ComplexityResult
         from open_agent.routing.domain import DomainRouteResult
         from open_agent.routing.intent import IntentResult
         decision = RoutingDecision(
-            complexity=ComplexityResult(complexity="simple", confidence=0.95, method="rule"),
+            complexity=ComplexityResult(complexity="simple", confidence=0.95, method="llm"),
             domain=DomainRouteResult(domain="general", candidates=["general"], routed_as_fallback=True),
             intent=IntentResult(intent="general_query"),
             skip_planning=True,
@@ -253,7 +290,12 @@ class TestSkipPlanningControl:
 
     @pytest.mark.asyncio
     async def test_complex_task_needs_planning(self):
-        pipeline = RoutingPipeline(fast_path_confidence=0.9)
+        provider = _MockProvider(side_effect=[
+            {"complexity": "complex", "confidence": 0.85, "reason": "multi-step"},
+            {"domain": "general", "candidates": ["general"]},
+            {"intent": "general_query", "slots": {}, "missing_slots": []},
+        ])
+        pipeline = RoutingPipeline(provider=provider, fast_path_confidence=0.9)
         decision = await pipeline.route("搜索竞品数据并分析对比，生成报告")
         assert decision.skip_planning is False
 

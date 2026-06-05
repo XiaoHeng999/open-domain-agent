@@ -191,7 +191,7 @@ class SubagentManager:
             from open_agent.routing.intent import IntentResult
             from open_agent.routing.complexity import ComplexityResult
 
-            complexity = ComplexityResult(complexity="simple", confidence=1.0, method="rule")
+            complexity = ComplexityResult(complexity="simple", confidence=1.0, method="llm")
             domain_result = DomainRouteResult(domain="general", candidates=["general"], routed_as_fallback=False)
             intent_result = IntentResult(intent="subagent_task")
             routing = RoutingDecision(

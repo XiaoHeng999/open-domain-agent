@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from open_agent.routing.complexity import RuleBasedComplexityJudge, ComplexityResult
+from open_agent.routing.complexity import LLMComplexityJudge, ComplexityResult
 from open_agent.routing.domain import DomainRouter, DomainRouteResult
 from open_agent.routing.intent import IntentParser, IntentResult
 from open_agent.routing.router import RoutingPipeline, RoutingDecision
@@ -14,63 +14,88 @@ from open_agent.routing.unified import UnifiedLLMRouter, UnifiedRoutingResult
 
 
 class TestComplexityJudge:
-    def test_simple_short_input(self):
-        judge = RuleBasedComplexityJudge()
-        result = judge.judge("hello")
+    def _make_provider(self, response: dict):
+        provider = AsyncMock()
+        provider.complete_structured = AsyncMock(return_value=response)
+        return provider
+
+    @pytest.mark.asyncio
+    async def test_simple_short_input(self):
+        provider = self._make_provider({"complexity": "simple", "confidence": 0.95, "reason": "greeting"})
+        judge = LLMComplexityJudge(provider)
+        result = await judge.judge("hello")
         assert result.complexity == "simple"
         assert result.confidence > 0.9
-        assert result.method == "rule"
+        assert result.method == "llm"
 
-    def test_complex_keywords(self):
-        judge = RuleBasedComplexityJudge()
-        result = judge.judge("搜索并分析竞品数据，然后生成报告")
-        assert result.complexity == "complex"
-        assert result.confidence > 0.7
-
-    def test_english_complex(self):
-        judge = RuleBasedComplexityJudge()
-        result = judge.judge("Research and compare multiple frameworks, then summarize findings")
+    @pytest.mark.asyncio
+    async def test_complex_keywords(self):
+        provider = self._make_provider({"complexity": "complex", "confidence": 0.85, "reason": "multi-step"})
+        judge = LLMComplexityJudge(provider)
+        result = await judge.judge("搜索并分析竞品数据，然后生成报告")
         assert result.complexity == "complex"
 
-    def test_long_input(self):
-        judge = RuleBasedComplexityJudge()
-        long_input = "a" * 300
-        result = judge.judge(long_input)
+    @pytest.mark.asyncio
+    async def test_english_complex(self):
+        provider = self._make_provider({"complexity": "complex", "confidence": 0.9, "reason": "research"})
+        judge = LLMComplexityJudge(provider)
+        result = await judge.judge("Research and compare multiple frameworks, then summarize findings")
         assert result.complexity == "complex"
 
-    def test_medium_simple(self):
-        judge = RuleBasedComplexityJudge()
-        result = judge.judge("What is Python?")
+    @pytest.mark.asyncio
+    async def test_medium_classification(self):
+        provider = self._make_provider({"complexity": "medium", "confidence": 0.82, "reason": "code gen"})
+        judge = LLMComplexityJudge(provider)
+        result = await judge.judge("Write a Python function to sort a list")
+        assert result.complexity == "medium"
+
+    @pytest.mark.asyncio
+    async def test_invalid_complexity_clamped(self):
+        provider = self._make_provider({"complexity": "unknown", "confidence": 0.5, "reason": "test"})
+        judge = LLMComplexityJudge(provider)
+        result = await judge.judge("hello")
         assert result.complexity == "simple"
+
+    @pytest.mark.asyncio
+    async def test_confidence_clamped(self):
+        provider = self._make_provider({"complexity": "simple", "confidence": 1.5, "reason": "test"})
+        judge = LLMComplexityJudge(provider)
+        result = await judge.judge("hello")
+        assert result.confidence == 1.0
 
 
 class TestDomainRouter:
-    def test_coding_domain(self):
+    @pytest.mark.asyncio
+    async def test_coding_domain(self):
         router = DomainRouter()
-        result = router.route("debug this python code error")
+        result = await router.route("debug this python code error")
         assert result.domain == "coding"
         assert not result.routed_as_fallback
 
-    def test_search_domain(self):
+    @pytest.mark.asyncio
+    async def test_search_domain(self):
         router = DomainRouter()
-        result = router.route("search for recent AI papers")
+        result = await router.route("search for recent AI papers")
         assert result.domain == "search"
 
-    def test_web_domain(self):
+    @pytest.mark.asyncio
+    async def test_web_domain(self):
         router = DomainRouter()
-        result = router.route("scrape website data with HTTP")
+        result = await router.route("scrape website data with HTTP")
         assert result.domain == "web"
 
-    def test_general_fallback(self):
+    @pytest.mark.asyncio
+    async def test_general_fallback(self):
         router = DomainRouter()
-        result = router.route("hello how are you")
+        result = await router.route("hello how are you")
         assert result.domain == "general"
         assert result.routed_as_fallback
 
-    def test_custom_domain(self):
+    @pytest.mark.asyncio
+    async def test_custom_domain(self):
         router = DomainRouter()
         router.register_domain("finance", "You are a finance expert.", keywords=["stock", "market", "投资"])
-        result = router.route("analyze stock market trends")
+        result = await router.route("analyze stock market trends")
         assert result.domain == "finance"
 
     def test_list_domains(self):
@@ -113,40 +138,60 @@ class TestIntentParser:
 
 
 class TestRoutingPipeline:
+    def _make_pipeline_provider(self, complexity_resp=None, domain_resp=None, intent_resp=None):
+        provider = AsyncMock()
+        provider.complete_structured = AsyncMock(side_effect=[
+            complexity_resp or {"complexity": "simple", "confidence": 0.95, "reason": "test"},
+            domain_resp or {"domain": "general", "candidates": ["general"]},
+            intent_resp or {"intent": "general_query", "slots": {}, "missing_slots": []},
+        ])
+        return provider
+
     @pytest.mark.asyncio
     async def test_simple_task_fast_path(self):
-        pipeline = RoutingPipeline(fast_path_confidence=0.9)
+        provider = self._make_pipeline_provider()
+        pipeline = RoutingPipeline(provider=provider, fast_path_confidence=0.9)
         decision = await pipeline.route("hello")
         assert decision.skip_planning
         assert decision.complexity.complexity == "simple"
 
     @pytest.mark.asyncio
     async def test_complex_task_needs_planning(self):
-        pipeline = RoutingPipeline()
+        provider = self._make_pipeline_provider(
+            complexity_resp={"complexity": "complex", "confidence": 0.85, "reason": "multi-step"},
+        )
+        pipeline = RoutingPipeline(provider=provider)
         decision = await pipeline.route("搜索竞品数据并分析对比，生成报告")
         assert not decision.skip_planning
         assert decision.complexity.complexity == "complex"
 
     @pytest.mark.asyncio
     async def test_routing_trace(self):
-        pipeline = RoutingPipeline()
+        provider = self._make_pipeline_provider(
+            domain_resp={"domain": "coding", "candidates": ["coding"]},
+            intent_resp={"intent": "debug_code", "slots": {}, "missing_slots": []},
+        )
+        pipeline = RoutingPipeline(provider=provider)
         decision = await pipeline.route("debug my python code")
         trace_data = pipeline.get_routing_trace(decision)
-        assert trace_data.complexity_judge["complexity"] in ("simple", "complex")
+        assert trace_data.complexity_judge["complexity"] in ("simple", "medium", "complex")
         assert trace_data.domain_router["domain"] == "coding"
         assert trace_data.intent_parser["intent"] == "debug_code"
 
     @pytest.mark.asyncio
     async def test_evaluate(self):
-        pipeline = RoutingPipeline()
+        provider = AsyncMock()
+        provider.complete_structured = AsyncMock(side_effect=[
+            {"complexity": "simple", "confidence": 0.95, "reason": "test"},
+            {"domain": "general", "candidates": ["general"]},
+            {"intent": "general_query", "slots": {}, "missing_slots": []},
+        ])
+        pipeline = RoutingPipeline(provider=provider)
         test_set = [
             {"input": "hello", "expected_complexity": "simple", "expected_domain": "general"},
-            {"input": "debug python code", "expected_complexity": "simple", "expected_domain": "coding"},
-            {"input": "search and analyze data then summarize", "expected_complexity": "complex", "expected_domain": "search"},
         ]
         results = await pipeline.evaluate(test_set)
         assert "complexity_accuracy" in results
-        assert "domain_accuracy" in results
         assert 0.0 <= results["complexity_accuracy"] <= 1.0
 
 
@@ -240,12 +285,18 @@ class TestRoutingPipelineHistoryPassthrough:
         assert messages[1]["content"] == "2+2等于几？"
 
     @pytest.mark.asyncio
-    async def test_keyword_fallback_no_history(self):
-        pipeline = RoutingPipeline()  # no routing_provider → keyword path
+    async def test_stages_path_no_history(self):
+        provider = AsyncMock()
+        provider.complete_structured = AsyncMock(side_effect=[
+            {"complexity": "simple", "confidence": 0.95, "reason": "test"},
+            {"domain": "general", "candidates": ["general"]},
+            {"intent": "general_query", "slots": {}, "missing_slots": []},
+        ])
+        pipeline = RoutingPipeline(provider=provider)  # no routing_provider → three-stage path
         history = [{"role": "user", "content": "past"}]
 
         decision = await pipeline.route("hello", history=history)
-        assert decision.method == "rule"
+        assert decision.method == "llm"
 
     @pytest.mark.asyncio
     async def test_no_history_default(self):
@@ -365,7 +416,7 @@ class TestMissingSlotsComplexityGating:
 
         trace = runtime.trace_manager.create_trace(metadata={"user_input": "test"})
         runtime.routing_pipeline.route = AsyncMock(return_value=RoutingDecision(
-            complexity=ComplexityResult(complexity="simple", confidence=0.95, method="rule"),
+            complexity=ComplexityResult(complexity="simple", confidence=0.95, method="llm"),
             domain=DomainRouteResult(domain="general", candidates=["general"], routed_as_fallback=True),
             intent=IntentResult(intent="weather_query", slots={}, missing_slots=["city"]),
             skip_planning=True,
@@ -385,7 +436,7 @@ class TestMissingSlotsComplexityGating:
         runtime = mock_components
 
         runtime.routing_pipeline.route = AsyncMock(return_value=RoutingDecision(
-            complexity=ComplexityResult(complexity="complex", confidence=0.8, method="rule"),
+            complexity=ComplexityResult(complexity="complex", confidence=0.8, method="llm"),
             domain=DomainRouteResult(domain="coding", candidates=["coding"], routed_as_fallback=False),
             intent=IntentResult(intent="create_code", slots={"task": "等差数列求和"}, missing_slots=["file_name"]),
             skip_planning=False,
@@ -415,7 +466,7 @@ class TestMissingSlotsComplexityGating:
         runtime = mock_components
 
         runtime.routing_pipeline.route = AsyncMock(return_value=RoutingDecision(
-            complexity=ComplexityResult(complexity="medium", confidence=0.85, method="rule"),
+            complexity=ComplexityResult(complexity="medium", confidence=0.85, method="llm"),
             domain=DomainRouteResult(domain="coding", candidates=["coding"], routed_as_fallback=False),
             intent=IntentResult(intent="write_code", slots={}, missing_slots=["output_format"]),
             skip_planning=False,
@@ -434,7 +485,7 @@ class TestMissingSlotsComplexityGating:
         runtime = mock_components
 
         runtime.routing_pipeline.route = AsyncMock(return_value=RoutingDecision(
-            complexity=ComplexityResult(complexity="simple", confidence=0.95, method="rule"),
+            complexity=ComplexityResult(complexity="simple", confidence=0.95, method="llm"),
             domain=DomainRouteResult(domain="general", candidates=["general"], routed_as_fallback=True),
             intent=IntentResult(intent="greet", slots={}, missing_slots=[]),
             skip_planning=True,
@@ -523,3 +574,61 @@ class TestTemperatureEnforcement:
         assert r1.missing_slots == r2.missing_slots == r3.missing_slots == []
         assert r1.domain == r2.domain == r3.domain == "coding"
         assert provider.complete_structured.call_count == 3
+
+
+class TestDomainRouterLLM:
+    """Test LLM-based domain routing in DomainRouter."""
+
+    def _make_provider(self, response: dict):
+        provider = AsyncMock()
+        provider.complete_structured = AsyncMock(return_value=response)
+        return provider
+
+    @pytest.mark.asyncio
+    async def test_llm_coding_domain(self):
+        provider = self._make_provider({"domain": "coding", "candidates": ["coding", "general"]})
+        router = DomainRouter(provider=provider)
+        result = await router.route("debug this python code error")
+        assert result.domain == "coding"
+        assert not result.routed_as_fallback
+        assert result.system_prompt != ""
+
+    @pytest.mark.asyncio
+    async def test_llm_general_fallback(self):
+        provider = self._make_provider({"domain": "general", "candidates": ["general"]})
+        router = DomainRouter(provider=provider)
+        result = await router.route("hello how are you")
+        assert result.domain == "general"
+        assert result.routed_as_fallback
+
+    @pytest.mark.asyncio
+    async def test_llm_invalid_domain_clamped(self):
+        provider = self._make_provider({"domain": "unknown_domain", "candidates": ["unknown_domain"]})
+        router = DomainRouter(provider=provider)
+        result = await router.route("some text")
+        assert result.domain == "general"
+
+    @pytest.mark.asyncio
+    async def test_llm_failure_raises_routing_error(self):
+        from open_agent.errors import RoutingError
+        provider = AsyncMock()
+        provider.complete_structured = AsyncMock(side_effect=RuntimeError("LLM failed"))
+        router = DomainRouter(provider=provider)
+        with pytest.raises(RoutingError):
+            await router.route("test")
+
+    @pytest.mark.asyncio
+    async def test_dynamic_domain_keyword_priority_over_llm(self):
+        """Dynamic domain keyword match takes priority over LLM result."""
+        provider = self._make_provider({"domain": "general", "candidates": ["general"]})
+        router = DomainRouter(provider=provider)
+        router.register_domain("finance", "Finance expert", keywords=["stock", "market"])
+        result = await router.route("analyze stock market trends")
+        assert result.domain == "finance"
+
+    @pytest.mark.asyncio
+    async def test_no_provider_keyword_fallback(self):
+        """Without provider, keyword matching still works (backward compatible)."""
+        router = DomainRouter()
+        result = await router.route("debug this python code error")
+        assert result.domain == "coding"

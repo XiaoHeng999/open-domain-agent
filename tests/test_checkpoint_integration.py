@@ -40,7 +40,7 @@ def _simple_routing_decision(*, skip_planning: bool = True) -> RoutingDecision:
         complexity=ComplexityResult(
             complexity="simple" if skip_planning else "complex",
             confidence=0.95,
-            method="rule",
+            method="llm",
         ),
         domain=DomainRouteResult(
             domain="general",
@@ -294,6 +294,14 @@ class TestAgentRuntimeResume:
         # Replace provider with mock to avoid needing openai
         runtime.provider = MagicMock()
         runtime.provider.on_start = AsyncMock()
+        # Replace routing_pipeline with mock to avoid LLM calls
+        runtime.routing_pipeline = AsyncMock()
+        runtime.routing_pipeline.route = AsyncMock(return_value=RoutingDecision(
+            complexity=ComplexityResult(complexity="simple", confidence=0.95, method="llm"),
+            domain=DomainRouteResult(domain="general", candidates=["general"], routed_as_fallback=True),
+            intent=IntentResult(intent="general_query", slots={}, missing_slots=[]),
+            skip_planning=True,
+        ))
         return runtime
 
     @pytest.mark.asyncio
@@ -432,6 +440,14 @@ class TestFailureAvoidanceHint:
         # Replace provider with mock
         runtime.provider = MagicMock()
         runtime.provider.on_start = AsyncMock()
+        # Replace routing_pipeline with mock to avoid LLM calls
+        runtime.routing_pipeline = AsyncMock()
+        runtime.routing_pipeline.route = AsyncMock(return_value=RoutingDecision(
+            complexity=ComplexityResult(complexity="complex", confidence=0.8, method="llm"),
+            domain=DomainRouteResult(domain="general", candidates=["general"], routed_as_fallback=True),
+            intent=IntentResult(intent="general_query", slots={}, missing_slots=[]),
+            skip_planning=False,
+        ))
         await runtime.on_start()
 
         # Save a checkpoint so there's something to list
@@ -441,6 +457,10 @@ class TestFailureAvoidanceHint:
 
         # Replace react_loop.run to raise AgentError
         runtime.react_loop.run = AsyncMock(side_effect=AgentError("Tool timeout"))
+
+        # Mock plan_generator to avoid LLM calls
+        runtime.plan_generator = AsyncMock()
+        runtime.plan_generator.generate = AsyncMock(return_value=MagicMock(steps=[]))
 
         # Mock retrieval_memory.write_episodic
         runtime._retrieval_memory.write_episodic = AsyncMock()

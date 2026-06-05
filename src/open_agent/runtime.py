@@ -92,7 +92,7 @@ class AgentRuntime(BaseComponent):
 
         # Routing
         self.routing_pipeline = RoutingPipeline(
-            complexity_method=self.config.routing.complexity_method,
+            provider=self._routing_provider,
             fast_path_confidence=self.config.routing.fast_path_confidence,
             domains=self.config.routing.domains,
             routing_provider=self._routing_provider,

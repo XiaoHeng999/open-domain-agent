@@ -1,76 +1,35 @@
-"""Complexity Judge — rule-based + optional LLM for simple/complex classification."""
+"""Complexity Judge — LLM-based simple/medium/complex classification."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from open_agent.base import BaseComponent
 
-# Keywords suggesting complex multi-step tasks
-_COMPLEX_KEYWORDS = {
-    "分析", "对比", "调研", "搜索", "整理", "汇总", "比较", "生成报告",
-    "analyze", "compare", "research", "search", "summarize", "investigate",
-    "build", "create", "implement", "refactor", "multi-step",
-    "然后", "接着", "之后", "最后", "and then", "after that", "finally",
-}
+_VALID_COMPLEXITIES = {"simple", "medium", "complex"}
 
 
 @dataclass
 class ComplexityResult:
     """Output of complexity judgment."""
 
-    complexity: str  # "simple" | "complex"
+    complexity: str  # "simple" | "medium" | "complex"
     confidence: float
-    method: str  # "rule" | "llm"
+    method: str  # always "llm"
     reason: str | None = None
 
 
-class RuleBasedComplexityJudge(BaseComponent):
-    """Rule-based complexity judge — keyword + length heuristics."""
-
-    def judge(self, user_input: str) -> ComplexityResult:
-        input_lower = user_input.lower()
-        input_len = len(user_input.strip())
-
-        # Short inputs with no complex keywords → simple
-        matched_keywords = [kw for kw in _COMPLEX_KEYWORDS if kw in input_lower]
-
-        if not matched_keywords and input_len < 50:
-            return ComplexityResult(
-                complexity="simple",
-                confidence=0.95,
-                method="rule",
-                reason="Short input, no complex keywords",
-            )
-
-        if matched_keywords:
-            return ComplexityResult(
-                complexity="complex",
-                confidence=0.7 + min(len(matched_keywords) * 0.1, 0.25),
-                method="rule",
-                reason=f"Complex keywords found: {matched_keywords}",
-            )
-
-        # Long input without complex keywords
-        if input_len > 200:
-            return ComplexityResult(
-                complexity="complex",
-                confidence=0.6,
-                method="rule",
-                reason="Long input suggests complexity",
-            )
-
-        return ComplexityResult(
-            complexity="simple",
-            confidence=0.7,
-            method="rule",
-            reason="No complex indicators found",
-        )
-
-
 class LLMComplexityJudge(BaseComponent):
-    """LLM-based complexity judge — uses lightweight model for classification."""
+    """LLM-based complexity judge — uses lightweight model for ternary classification."""
+
+    _SYSTEM_PROMPT = (
+        "Classify the following task into one of three complexity levels:\n"
+        "- simple: greetings, factual questions, single-step tasks that can be answered directly\n"
+        "- medium: single-step tasks requiring generation or transformation (e.g. write a function, translate text)\n"
+        "- complex: multi-step tasks, research, analysis, comparisons, reports, or tasks requiring planning\n\n"
+        'Respond with JSON: {"complexity": "simple"|"medium"|"complex", "confidence": 0.0-1.0, "reason": "..."}'
+    )
 
     def __init__(self, provider: Any) -> None:
         super().__init__()
@@ -78,23 +37,20 @@ class LLMComplexityJudge(BaseComponent):
 
     async def judge(self, user_input: str) -> ComplexityResult:
         messages = [
-            {"role": "system", "content": (
-                "Classify the following task as 'simple' or 'complex'. "
-                "Respond with JSON: {\"complexity\": \"simple\"|\"complex\", \"confidence\": 0.0-1.0, \"reason\": \"...\"}"
-            )},
+            {"role": "system", "content": self._SYSTEM_PROMPT},
             {"role": "user", "content": user_input},
         ]
-        try:
-            result = await self._provider.complete_structured(
-                messages,
-                schema={"complexity": "string", "confidence": "number", "reason": "string"},
-            )
-            return ComplexityResult(
-                complexity=result.get("complexity", "simple"),
-                confidence=float(result.get("confidence", 0.5)),
-                method="llm",
-                reason=result.get("reason"),
-            )
-        except Exception:
-            # Fallback to rule-based
-            return RuleBasedComplexityJudge().judge(user_input)
+        result = await self._provider.complete_structured(
+            messages,
+            schema={"complexity": "string", "confidence": "number", "reason": "string"},
+        )
+        complexity = result.get("complexity", "simple")
+        if complexity not in _VALID_COMPLEXITIES:
+            complexity = "simple"
+        confidence = max(0.0, min(1.0, float(result.get("confidence", 0.5))))
+        return ComplexityResult(
+            complexity=complexity,
+            confidence=confidence,
+            method="llm",
+            reason=result.get("reason"),
+        )

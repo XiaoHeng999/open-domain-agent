@@ -57,7 +57,7 @@ def _make_runtime() -> AgentRuntime:
 
 def _fast_path_decision() -> RoutingDecision:
     return RoutingDecision(
-        complexity=ComplexityResult(complexity="simple", confidence=0.95, method="rule"),
+        complexity=ComplexityResult(complexity="simple", confidence=0.95, method="llm"),
         domain=DomainRouteResult(domain="general", candidates=["general"], routed_as_fallback=True),
         intent=IntentResult(intent="greeting", slots={}, missing_slots=[]),
         skip_planning=True,
@@ -143,7 +143,7 @@ class TestFastPathNotTriggered:
     async def test_with_slots_skips_fast_path(self):
         runtime = _make_runtime()
         decision = RoutingDecision(
-            complexity=ComplexityResult(complexity="simple", confidence=0.95, method="rule"),
+            complexity=ComplexityResult(complexity="simple", confidence=0.95, method="llm"),
             domain=DomainRouteResult(domain="weather", candidates=["weather"], routed_as_fallback=False),
             intent=IntentResult(intent="weather_query", slots={"city": "Beijing"}, missing_slots=[]),
             skip_planning=True,
@@ -159,7 +159,7 @@ class TestFastPathNotTriggered:
     async def test_complex_request_skips_fast_path(self):
         runtime = _make_runtime()
         decision = RoutingDecision(
-            complexity=ComplexityResult(complexity="complex", confidence=0.7, method="rule"),
+            complexity=ComplexityResult(complexity="complex", confidence=0.7, method="llm"),
             domain=DomainRouteResult(domain="coding", candidates=["coding"], routed_as_fallback=False),
             intent=IntentResult(intent="create_project", slots={}, missing_slots=[]),
             skip_planning=False,
@@ -175,7 +175,7 @@ class TestFastPathNotTriggered:
     async def test_with_missing_slots_skips_fast_path(self):
         runtime = _make_runtime()
         decision = RoutingDecision(
-            complexity=ComplexityResult(complexity="simple", confidence=0.95, method="rule"),
+            complexity=ComplexityResult(complexity="simple", confidence=0.95, method="llm"),
             domain=DomainRouteResult(domain="weather", candidates=["weather"], routed_as_fallback=False),
             intent=IntentResult(intent="weather_query", slots={}, missing_slots=["city"]),
             skip_planning=True,

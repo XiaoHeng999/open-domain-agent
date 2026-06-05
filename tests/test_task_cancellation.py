@@ -102,7 +102,7 @@ async def test_react_loop_stops_on_cancellation() -> None:
     from open_agent.routing.intent import IntentResult
 
     routing = RoutingDecision(
-        complexity=ComplexityResult(complexity="simple", confidence=0.9, method="rule"),
+        complexity=ComplexityResult(complexity="simple", confidence=0.9, method="llm"),
         domain=DomainRouteResult(domain="general", candidates=["general"], routed_as_fallback=False),
         intent=IntentResult(intent="general"),
         method="react",
@@ -164,7 +164,7 @@ async def test_loop_state_consistent_after_cancellation() -> None:
     from open_agent.routing.intent import IntentResult
 
     routing = RoutingDecision(
-        complexity=ComplexityResult(complexity="simple", confidence=0.9, method="rule"),
+        complexity=ComplexityResult(complexity="simple", confidence=0.9, method="llm"),
         domain=DomainRouteResult(domain="general", candidates=["general"], routed_as_fallback=False),
         intent=IntentResult(intent="general"),
         method="react",

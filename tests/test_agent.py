@@ -35,7 +35,7 @@ def _simple_routing_decision(*, skip_planning: bool = True) -> RoutingDecision:
         complexity=ComplexityResult(
             complexity="simple" if skip_planning else "complex",
             confidence=0.95 if skip_planning else 0.7,
-            method="rule",
+            method="llm",
         ),
         domain=DomainRouteResult(
             domain="general",
