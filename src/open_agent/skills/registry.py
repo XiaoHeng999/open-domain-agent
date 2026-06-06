@@ -49,9 +49,9 @@ class SkillRegistry:
             raise KeyError(f"Skill not found: {name}")
         return self._skills[name]
 
-    def list_skills(self) -> list[SkillMeta]:
-        """List all registered skill metadata."""
-        return [s.meta for s in self._skills.values()]
+    def list_skills(self) -> list[Skill]:
+        """List all registered skills (with metadata and file_path)."""
+        return list(self._skills.values())
 
     def list_by_domain(self, domain: str) -> list[SkillMeta]:
         """List skills matching a domain."""

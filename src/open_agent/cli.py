@@ -483,11 +483,21 @@ def skill_group(
 ) -> None:
     """Manage skills (list available skills)."""
     if action == "list":
+        from open_agent.skills import SkillRegistry, scan_builtin_skills
+        registry = SkillRegistry()
+        scan_builtin_skills(registry)
+        skills = registry.list_skills()
+        if not skills:
+            console.print("[yellow]No skills found.[/yellow]")
+            return
         table = Table(title="Available Skills")
         table.add_column("Name", style="cyan")
         table.add_column("Domain")
         table.add_column("Description")
-        table.add_row("(no skills loaded)", "-", "-")
+        table.add_column("Source")
+        for s in skills:
+            src = s.file_path or "-"
+            table.add_row(s.meta.name, s.meta.domain, s.meta.description or "-", src)
         console.print(table)
     else:
         console.print(f"[red]Unknown action: {action}[/red]")
