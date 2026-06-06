@@ -122,7 +122,7 @@ def test_my_tool_validation():
 
 ## 常见陷阱
 
-- **不要用 `@tool_schema`**：已废弃，使用 Tool ABC 继承
+- **`@tool_schema` vs Tool ABC**：对于独立工具类，使用 Tool ABC 继承。`@tool_schema` 用于沙箱集成等需要动态 schema 注册的场景（如 `docker.py`、`daytona.py`）
 - **返回值必须是 str**：`execute()` 返回字符串，框架处理后续
 - **不要绕过安全检查**：即使工具内部执行命令，也要声明 `safety_checks = ["command"]`
 - **异步必须用 async def**：同步的 `execute()` 不会被 await

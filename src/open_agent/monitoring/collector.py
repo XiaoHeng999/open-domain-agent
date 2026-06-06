@@ -124,10 +124,8 @@ class AnomalyDetector:
 class QualityScorer:
     """Compute quality score for an execution trace.
 
-    .. deprecated::
-        Quality scoring has moved to eval.metrics.compute_metrics().
-        This class is retained for backward compatibility only.
-        For authoritative scoring, use the eval pipeline.
+    Real-time quality scoring for the agent loop. For post-hoc evaluation
+    metrics, see eval.metrics.compute_metrics().
     """
 
     def score(self, trace: Trace) -> QualityScore:

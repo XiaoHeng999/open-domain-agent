@@ -9,7 +9,7 @@
   "08-recovery-dead-paths-cleanup": "done",
   "09-silent-exception-tiered-logging": "done",
   "10-dead-code-and-duplicate-cleanup": "pending",
-  "11-cli-token-usage-display": "doing",
-  "12-docs-and-deprecation-updates": "pending",
+  "11-cli-token-usage-display": "done",
+  "12-docs-and-deprecation-updates": "doing",
   "13-test-infrastructure": "pending"
 }
