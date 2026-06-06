@@ -50,8 +50,3 @@ class TestToolMessages:
         total_tokens = sum(estimate_tokens(m.get("content", "")) for m in msgs)
         # Should have truncated oldest messages to stay under budget
         assert total_tokens <= config.max_tool_result_tokens or len(msgs) < 5
-
-    def test_no_runtime_memory_graceful(self):
-        """Without RuntimeMemory, tool_messages should still work (backward compat)."""
-        # This is tested by existing ReActLoop tests
-        pass

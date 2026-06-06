@@ -42,4 +42,15 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = [
     "live: marks tests as live E2E (requires API key)",
+    "slow: marks tests as slow (integration tests, real API calls)",
+    "integration: marks tests that require external services",
+    "unit: marks tests as fast unit tests (no external deps)",
 ]
+
+[tool.coverage.run]
+source = ["open_agent"]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 50

@@ -8,8 +8,8 @@
   "07-skill-cli-wiring": "done",
   "08-recovery-dead-paths-cleanup": "done",
   "09-silent-exception-tiered-logging": "done",
-  "10-dead-code-and-duplicate-cleanup": "doing",
+  "10-dead-code-and-duplicate-cleanup": "done",
   "11-cli-token-usage-display": "done",
   "12-docs-and-deprecation-updates": "done",
-  "13-test-infrastructure": "pending"
+  "13-test-infrastructure": "doing"
 }

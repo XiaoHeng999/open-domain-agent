@@ -67,7 +67,7 @@ class TestSafetyMiddleware:
     async def test_blocks_dangerous_command(self):
         mw = SafetyMiddleware()
         safety = MagicMock()
-        safety.check_command = MagicMock(return_value=MagicMock(safe=False, reason="dangerous"))
+        safety.check_command = MagicMock(return_value=MagicMock(safe=False, reason="dangerous", risk_level="blocked"))
         tool = _make_tool(safety_checks=["command"])
         ctx = _make_context(
             tool=tool,
@@ -185,12 +185,12 @@ class TestTruncateMiddleware:
 
 
 class TestFullChain:
-    async def test_full_chain_safety_blocks(self):
-        registry = __import__("open_agent.registry", fromlist=["ToolRegistry"]).ToolRegistry()
+    async def test_full_chain_safety_blocks(self, tool_registry):
+        """Uses shared tool_registry fixture from conftest."""
         safety = MagicMock()
-        safety.check_command = MagicMock(return_value=MagicMock(safe=False, reason="dangerous"))
-        registry._safety_manager = safety
-        registry._chain = default_chain(
+        safety.check_command = MagicMock(return_value=MagicMock(safe=False, reason="dangerous", risk_level="blocked"))
+        tool_registry._safety_manager = safety
+        tool_registry._chain = default_chain(
             safety_manager=safety,
             max_tool_result_tokens=2000,
         )
@@ -199,8 +199,8 @@ class TestFullChain:
             safety_checks=["command"],
             handler=lambda command: "executed",
         )
-        registry.register(tool)
-        result = await registry.execute("exec", {"command": "rm -rf /"})
+        tool_registry.register(tool)
+        result = await tool_registry.execute("exec", {"command": "rm -rf /"})
         assert "blocked" in result.lower()
 
 
