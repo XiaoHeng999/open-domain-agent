@@ -11,5 +11,5 @@
   "10-dead-code-and-duplicate-cleanup": "done",
   "11-cli-token-usage-display": "done",
   "12-docs-and-deprecation-updates": "done",
-  "13-test-infrastructure": "doing"
+  "13-test-infrastructure": "done"
 }
