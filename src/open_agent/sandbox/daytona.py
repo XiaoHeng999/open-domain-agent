@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
+
+logger = logging.getLogger("open_agent.sandbox")
 
 from open_agent.base import BaseComponent
 from open_agent.decorators import tool_schema
@@ -32,7 +35,7 @@ class DaytonaSandbox(BaseComponent):
             try:
                 self._client.remove(self._workspace)
             except Exception:
-                pass
+                logger.debug("Failed to remove Daytona workspace", exc_info=True)
 
     @tool_schema(name="sandbox_exec")
     async def exec(self, command: str, timeout: int = 30) -> dict[str, Any]:

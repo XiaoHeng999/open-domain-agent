@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import os
+import logging
 from enum import Enum
 from pathlib import Path
 from typing import Any, Literal, Optional
 
 import yaml
 from pydantic import BaseModel, Field, model_validator
+
+logger = logging.getLogger("open_agent.config")
 
 
 class PermissionMode(str, Enum):
@@ -289,7 +292,7 @@ def _apply_env_overrides(data: dict[str, Any]) -> None:
             mcp_data = data.setdefault("mcp", {})
             mcp_data["servers"] = _json.loads(mcp_servers_env)
         except (ValueError, TypeError):
-            pass
+            logger.warning("Failed to parse OPEN_AGENT_MCP_SERVERS env var", exc_info=True)
 
 
 def _deep_merge(base: dict, override: dict) -> None:

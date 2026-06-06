@@ -145,9 +145,7 @@ class EvalRunner:
                 cfg = self._runtime.config
                 model_info = {"provider": cfg.model.provider, "name": cfg.model.name}
             except Exception:
-                pass
-
-        # Remove transient fields before serialization
+                logger.debug("Failed to extract model info from runtime", exc_info=True)
         clean_results = []
         for r in results:
             clean = {k: v for k, v in r.items() if k != "replay_result"}
@@ -175,11 +173,10 @@ class EvalRunner:
                 if isinstance(val, int):
                     retention = val
             except Exception:
-                pass
+                logger.debug("Failed to read results_retention config", exc_info=True)
         _enforce_retention(jsonl_path, retention)
 
         # Persist trajectories
-        self._save_trajectories(output_dir, results, suite_name=suite_name)
 
     def _save_trajectories(
         self,
@@ -208,7 +205,7 @@ class EvalRunner:
                     with open(jsonl_path, "a") as f:
                         f.write(entry + "\n")
                 except Exception:
-                    pass
+                    logger.debug("Failed to write trajectory for %s", name, exc_info=True)
 
         # Enforce retention
         retention = 200
@@ -218,7 +215,7 @@ class EvalRunner:
                 if isinstance(val, int):
                     retention = val
             except Exception:
-                pass
+                logger.debug("Failed to read trajectories_retention config", exc_info=True)
         _enforce_retention(jsonl_path, retention)
 
     async def _run_scenario(self, scenario: dict[str, Any]) -> dict[str, Any]:

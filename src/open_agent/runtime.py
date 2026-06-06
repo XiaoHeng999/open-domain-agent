@@ -346,7 +346,7 @@ class AgentRuntime(BaseComponent):
             try:
                 await self.trace_manager.persist_all_traces()
             except Exception:
-                pass
+                logger.warning("Failed to persist traces during shutdown", exc_info=True)
 
         # Cascading stop: terminate all active sub-agents
         if self._subagent_manager:

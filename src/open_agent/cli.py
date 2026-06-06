@@ -22,6 +22,7 @@ from open_agent.trace import setup_structured_logging
 
 app = typer.Typer(name="agent", help="Open-domain Agent Framework CLI")
 console = Console()
+logger = logging.getLogger("open_agent.cli")
 
 _verbose: bool = False
 
@@ -162,7 +163,7 @@ def chat(
     try:
         _run_async(_run())
     except KeyboardInterrupt:
-        pass
+        logger.debug("Chat interrupted by user")
     console.print("[dim]Goodbye.[/dim]")
 
 
@@ -205,7 +206,7 @@ def eval_cmd(
         from open_agent.runtime import AgentRuntime
         runtime = AgentRuntime(config=cfg)
     except Exception:
-        pass
+        logger.warning("Failed to create AgentRuntime for eval", exc_info=True)
 
     if runtime is not None:
         runner._runtime = runtime

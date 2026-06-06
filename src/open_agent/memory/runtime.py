@@ -167,7 +167,7 @@ class RuntimeMemory(MemoryManager):
                     self._db_conn.execute("DELETE FROM messages")
                     self._db_conn.commit()
                 except sqlite3.Error:
-                    pass
+                    logger.debug("Failed to clear messages table", exc_info=True)
 
     def close(self) -> None:
         """Close the SQLite connection if open."""
@@ -175,7 +175,7 @@ class RuntimeMemory(MemoryManager):
             try:
                 self._db_conn.close()
             except sqlite3.Error:
-                pass
+                logger.debug("Failed to close SQLite connection", exc_info=True)
             self._db_conn = None
 
     # ------------------------------------------------------------------

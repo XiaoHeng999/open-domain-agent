@@ -8,6 +8,7 @@ deterministic: no LLM is consulted to choose what to do.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -15,6 +16,8 @@ from enum import Enum
 from typing import Any, Callable
 
 from open_agent.errors import ToolError
+
+logger = logging.getLogger("open_agent.recovery")
 
 
 # ---------------------------------------------------------------------------
@@ -421,7 +424,7 @@ class ParseRecoveryStrategy(RecoveryStrategy):
                     duration_ms=(time.monotonic() - start) * 1000,
                 )
             except Exception:
-                pass
+                logger.debug("LLM-assisted parse repair failed", exc_info=True)
 
         return RecoveryResult(
             status=RecoveryStatus.FAILED,

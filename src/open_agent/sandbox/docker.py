@@ -47,9 +47,7 @@ class DockerSandbox(BaseComponent):
                 self._container.stop(timeout=5)
                 self._container.remove()
             except Exception:
-                pass
-
-    @tool_schema(name="sandbox_exec")
+                logger.debug("Failed to clean up Docker container", exc_info=True)
     async def exec(self, command: str, timeout: int = 30) -> dict[str, Any]:
         if not self._container:
             return {"success": False, "error": "Sandbox not started"}
@@ -145,7 +143,7 @@ class DockerSandbox(BaseComponent):
                     await asyncio.to_thread(old_container.stop, timeout=5)
                     await asyncio.to_thread(old_container.remove)
                 except Exception:
-                    pass
+                    logger.debug("Failed to clean up old container during restore", exc_info=True)
 
             # Create new container from snapshot image
             try:

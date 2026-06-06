@@ -12,6 +12,9 @@ from pathlib import Path
 from typing import Any
 
 
+logger = logging.getLogger("open_agent.trace")
+
+
 class SpanStatus(str, Enum):
     OK = "ok"
     ERROR = "error"
@@ -160,7 +163,7 @@ class TraceManager:
             with open(jsonl_path, "a") as f:
                 f.write(line + "\n")
         except Exception:
-            pass
+            logger.debug("Failed to persist trace %s", trace_id, exc_info=True)
 
     async def persist_all_traces(self) -> None:
         """Persist all in-memory traces to disk."""
@@ -174,7 +177,7 @@ class TraceManager:
             if isinstance(retention, int):
                 _enforce_trace_retention(Path(self._trace_dir) / "traces.jsonl", retention)
         except Exception:
-            pass
+            logger.debug("Failed to enforce trace retention", exc_info=True)
 
     @staticmethod
     def _parse_trace_dict(data: dict[str, Any]) -> Trace:
@@ -217,7 +220,7 @@ class TraceManager:
                     if data.get("trace_id") == trace_id:
                         return self._parse_trace_dict(data)
             except Exception:
-                pass
+                logger.debug("Failed to load trace %s from JSONL", trace_id, exc_info=True)
 
         # Fallback: legacy per-file format
         legacy_path = trace_dir / f"{trace_id}.json"
@@ -226,7 +229,7 @@ class TraceManager:
                 data = json.loads(legacy_path.read_text())
                 return self._parse_trace_dict(data)
             except Exception:
-                pass
+                logger.debug("Failed to load trace %s from legacy file", trace_id, exc_info=True)
 
         return None
 
@@ -253,9 +256,7 @@ class TraceManager:
                     if "trace_id" in data:
                         ids.add(data["trace_id"])
             except Exception:
-                pass
-
-        # From legacy files
+                logger.debug("Failed to list persisted traces from JSONL", exc_info=True)
         for p in trace_dir.glob("*.json"):
             ids.add(p.stem)
 

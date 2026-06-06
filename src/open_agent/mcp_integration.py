@@ -242,7 +242,7 @@ class MCPTransport:
                                     event = json.loads(data_str)
                                     await self._sse_event_queue.put(event)
                                 except json.JSONDecodeError:
-                                    pass
+                                    logger.debug("Skipping non-JSON SSE data: %s", data_str[:100])
             except Exception as e:
                 logger.warning("SSE connection error: %s, retry %d/%d", e, retries + 1, max_retries)
                 retries += 1
