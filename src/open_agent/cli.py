@@ -109,12 +109,22 @@ def chat(
     async def _run():
         await runtime.on_start()
         session: PromptSession[str] = PromptSession()
+        session_tokens = 0
         try:
             while True:
+                # Budget indicator in prompt
+                budget_total = cfg.memory.runtime_token_budget
+                if runtime._runtime_memory is not None:
+                    mem_used = runtime._runtime_memory.total_tokens
+                    budget_remaining = max(0, budget_total - mem_used)
+                    prefix = HTML(
+                        f"<ansicyan>[budget: {budget_remaining}/{budget_total}]</ansicyan> "
+                        f"<ansigreen><b>User:</b></ansigreen> "
+                    )
+                else:
+                    prefix = HTML("<ansigreen><b>User:</b></ansigreen> ")
                 try:
-                    user_input = (await session.prompt_async(
-                        HTML("<ansigreen><b>User:</b></ansigreen> "),
-                    )).strip()
+                    user_input = (await session.prompt_async(prefix)).strip()
                 except (KeyboardInterrupt, EOFError):
                     break
                 if user_input.lower() in ("exit", "quit"):
@@ -149,6 +159,16 @@ def chat(
                             console.print(f"  [green]Observation:[/] {preview}")
 
                     console.print(f"\n[bold green]Answer:[/] {response.output}")
+
+                    # Token usage display (chat mode only)
+                    usage = response.metadata.get("usage") or {}
+                    resp_tokens = (usage.get("input_tokens") or 0) + (usage.get("output_tokens") or 0)
+                    if resp_tokens > 0:
+                        session_tokens += resp_tokens
+                        console.print(
+                            f"[dim]Tokens: ~{resp_tokens} | "
+                            f"Session total: ~{session_tokens}[/dim]"
+                        )
                     if _verbose:
                         console.print(
                             f"[dim]Trace: {response.trace_id} | "

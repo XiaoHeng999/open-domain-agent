@@ -7,9 +7,9 @@
   "06-sqlite-concurrency-and-encapsulation": "done",
   "07-skill-cli-wiring": "done",
   "08-recovery-dead-paths-cleanup": "done",
-  "09-silent-exception-tiered-logging": "doing",
+  "09-silent-exception-tiered-logging": "done",
   "10-dead-code-and-duplicate-cleanup": "pending",
-  "11-cli-token-usage-display": "pending",
+  "11-cli-token-usage-display": "doing",
   "12-docs-and-deprecation-updates": "pending",
   "13-test-infrastructure": "pending"
 }

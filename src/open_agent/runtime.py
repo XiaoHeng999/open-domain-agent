@@ -597,6 +597,8 @@ class AgentRuntime(BaseComponent):
                 "matched_skills": [s["name"] for s in matched_skills],
                 "total_steps": response.total_steps,
                 "usage": response.total_usage,
+                "memory_tokens": self._runtime_memory.total_tokens if self._runtime_memory else 0,
+                "token_budget": self.config.memory.runtime_token_budget,
                 "steps": [
                     {
                         "thought": step.thought.content if step.thought else None,

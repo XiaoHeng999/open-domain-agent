@@ -271,6 +271,11 @@ class RuntimeMemory(MemoryManager):
             total += msg.tokens
         return total
 
+    @property
+    def total_tokens(self) -> int:
+        """Current total token usage (summary + messages)."""
+        return self._total_tokens()
+
     async def _maybe_compress(self) -> None:
         level = self.compression_level
         if level == _COMPRESS_NORMAL:
