@@ -178,10 +178,10 @@ class ParameterRecoveryStrategy(RecoveryStrategy):
 
 
 class RetrievalRecoveryStrategy(RecoveryStrategy):
-    """Expand query / relax filters / use cache.
+    """Retry query / relax filters / use cache.
 
     Runs through up to three sub-steps in order, stopping at first success:
-    1. ``expand_query`` — broaden the search query string.
+    1. ``retry_query`` — retry with the original query.
     2. ``relax_filters`` — remove the most restrictive filter keys.
     3. ``use_cache`` — return a stale-but-acceptable cached result.
     """
@@ -194,11 +194,9 @@ class RetrievalRecoveryStrategy(RecoveryStrategy):
         start = time.monotonic()
         args: dict[str, Any] = dict(context.get("args", {}))
 
-        # Step 1 — expand query -----------------------------------------
+        # Step 1 — retry with original query ------------------------------
         query = args.get("query", args.get("q", ""))
         if query:
-            expanded = self._expand_query(str(query))
-            args["query"] = expanded
             tool_registry = context.get("tool_registry")
             tool_name = context.get("tool_name", "")
             tool_handler = context.get("tool_handler")
@@ -209,8 +207,8 @@ class RetrievalRecoveryStrategy(RecoveryStrategy):
                         status=RecoveryStatus.SUCCESS,
                         error_type="retrieval_error",
                         strategy_name=self.name,
-                        message="Query expanded; retry succeeded.",
-                        data={"expanded_query": expanded, "result": result},
+                        message="Query retry succeeded.",
+                        data={"result": result},
                         duration_ms=(time.monotonic() - start) * 1000,
                     )
                 except Exception:
@@ -224,8 +222,8 @@ class RetrievalRecoveryStrategy(RecoveryStrategy):
                         status=RecoveryStatus.SUCCESS,
                         error_type="retrieval_error",
                         strategy_name=self.name,
-                        message="Query expanded; retry succeeded.",
-                        data={"expanded_query": expanded, "result": result},
+                        message="Query retry succeeded.",
+                        data={"result": result},
                         duration_ms=(time.monotonic() - start) * 1000,
                     )
                 except Exception:
@@ -294,11 +292,6 @@ class RetrievalRecoveryStrategy(RecoveryStrategy):
     # -- helpers --------------------------------------------------------
 
     @staticmethod
-    def _expand_query(query: str) -> str:
-        """Simple query expansion: append a broader synonym hint."""
-        return f"{query} OR *"
-
-    @staticmethod
     def _relax_filters(filters: dict[str, Any]) -> dict[str, Any]:
         """Drop the most specific (longest value) filter entry."""
         if not filters:
@@ -308,10 +301,9 @@ class RetrievalRecoveryStrategy(RecoveryStrategy):
 
 
 class ServiceRecoveryStrategy(RecoveryStrategy):
-    """Exponential backoff retry (max 3 attempts), then fallback tool lookup.
+    """Exponential backoff retry (max 3 attempts).
 
-    The backoff sequence is: 0.1s, 0.2s, 0.4s.  If all retries fail, look
-    for a fallback tool tagged ``fallback`` in the tool registry.
+    The backoff sequence is: 0.1s, 0.2s, 0.4s.
     """
 
     MAX_RETRIES: int = 3
@@ -364,24 +356,7 @@ class ServiceRecoveryStrategy(RecoveryStrategy):
                 except Exception as exc:
                     last_exc = exc
 
-        # Phase 2 — fallback tool lookup via registry.execute() ----------
-        if tool_registry is not None:
-            fallback_tools = tool_registry.list_by_tag("fallback")
-            for entry in fallback_tools:
-                try:
-                    result = await tool_registry.execute(entry.name, args)
-                    return RecoveryResult(
-                        status=RecoveryStatus.SUCCESS,
-                        error_type="service_error",
-                        strategy_name=self.name,
-                        attempt=self.MAX_RETRIES + 1,
-                        message=f"Fallback tool '{entry.name}' succeeded.",
-                        data={"fallback_tool": entry.name, "result": result},
-                        duration_ms=(time.monotonic() - start) * 1000,
-                    )
-                except Exception:
-                    continue
-
+        # All retries exhausted — report failure
         msg = f"All {self.MAX_RETRIES} retries failed"
         if last_exc:
             msg += f" (last: {last_exc})"

@@ -101,6 +101,17 @@ class TestSearchTool:
         assert "Unknown action" in result
 
     @pytest.mark.asyncio
+    async def test_glob_result_limit(self, tmp_path):
+        """Glob results should be truncated at 200 matches."""
+        (tmp_path / "files").mkdir()
+        for i in range(250):
+            (tmp_path / "files" / f"file_{i:04d}.txt").write_text(f"content {i}")
+        tool = SearchTool(workspace=str(tmp_path))
+        result = await tool.execute(action="glob", pattern="**/*.txt", path="files")
+        assert "truncated" in result
+        assert "250 total matches" in result
+
+    @pytest.mark.asyncio
     async def test_grep_rg_not_available(self, monkeypatch):
         tool = SearchTool()
         monkeypatch.setattr(shutil, "which", lambda cmd: None if cmd == "rg" else shutil.which.__wrapped__(cmd) if hasattr(shutil.which, '__wrapped__') else None)

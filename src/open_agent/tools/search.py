@@ -9,6 +9,7 @@ from typing import Any
 from open_agent.tools.base import Tool
 
 _MAX_RESULTS = 100
+_MAX_GLOB_RESULTS = 200
 
 
 class SearchTool(Tool):
@@ -143,5 +144,10 @@ class SearchTool(Tool):
 
         if not matches:
             return "No files matched the pattern."
+
+        if len(matches) > _MAX_GLOB_RESULTS:
+            total = len(matches)
+            matches = matches[:_MAX_GLOB_RESULTS]
+            matches.append(f"...[truncated, {total} total matches]")
 
         return "\n".join(matches)

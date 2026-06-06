@@ -173,13 +173,11 @@ class TestParameterRecoveryStrategy:
 
 class TestRetrievalRecoveryStrategy:
     @pytest.mark.asyncio
-    async def test_query_expansion_succeeds(self) -> None:
-        """Strategy expands query and retries."""
+    async def test_query_retry_succeeds(self) -> None:
+        """Strategy retries with the original query."""
 
         def handler(query: str) -> list[str]:
-            if "*" in query:
-                return ["result1", "result2"]
-            raise RetrievalError("empty result")
+            return ["result1", "result2"]
 
         error = RetrievalError("no results", tool_name="search")
         ctx = {"args": {"query": "cats"}, "tool_handler": handler}
@@ -253,8 +251,8 @@ class TestServiceRecoveryStrategy:
         assert result.attempt >= 2
 
     @pytest.mark.asyncio
-    async def test_fallback_tool_succeeds(self) -> None:
-        """When retries fail, strategy looks for a fallback tool in registry."""
+    async def test_all_retries_with_registry_fail(self) -> None:
+        """When retries fail with a registry present, returns FAILED (no fallback lookup)."""
         registry = ToolRegistry()
         registry.register(
             FunctionTool(
@@ -265,21 +263,11 @@ class TestServiceRecoveryStrategy:
             ),
             tags=["primary"],
         )
-        registry.register(
-            FunctionTool(
-                name="fallback_search",
-                description="Fallback search",
-                parameters={"type": "object", "properties": {}},
-                handler=lambda: "fallback_ok",
-            ),
-            tags=["fallback"],
-        )
 
         error = ServiceError("timeout", tool_name="primary")
         ctx = {"tool_handler": lambda: (_ for _ in ()).throw(ServiceError("down")), "args": {}, "tool_registry": registry}
         result = await ServiceRecoveryStrategy().execute(error, ctx)
-        assert result.status == RecoveryStatus.SUCCESS
-        assert result.data["fallback_tool"] == "fallback_search"
+        assert result.status == RecoveryStatus.FAILED
 
     @pytest.mark.asyncio
     async def test_all_retries_exhaust(self) -> None:
