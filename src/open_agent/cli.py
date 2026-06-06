@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Optional
 
 import typer
-from prompt_toolkit import prompt as _ptk_prompt
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.shortcuts import PromptSession
 from rich.console import Console

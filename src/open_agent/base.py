@@ -39,29 +39,6 @@ class MemoryManager(BaseComponent, ABC):
         ...
 
 
-class ToolExecutor(BaseComponent, ABC):
-    """Abstract interface for tool execution — deprecated, use ToolRegistry.execute()."""
-
-    @abstractmethod
-    async def execute(self, tool_name: str, args: dict[str, Any]) -> Any:
-        ...
-
-class IntentRecognizer(BaseComponent, ABC):
-    """Abstract interface for intent recognition."""
-
-    @abstractmethod
-    async def recognize(self, user_input: str) -> Any:
-        ...
-
-
-class Router(BaseComponent, ABC):
-    """Abstract interface for request routing."""
-
-    @abstractmethod
-    async def route(self, user_input: str) -> Any:
-        ...
-
-
 class ModelProvider(BaseComponent, ABC):
     """Abstract interface for LLM providers."""
 

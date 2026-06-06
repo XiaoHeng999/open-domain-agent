@@ -1,4 +1,4 @@
-"""Tests for monitoring boundary cleanup — deprecation + FeedbackLoop wiring."""
+"""Tests for monitoring boundary cleanup — FeedbackLoop wiring."""
 
 from __future__ import annotations
 
@@ -8,9 +8,9 @@ from open_agent.monitoring.collector import QualityScorer, FeedbackLoop
 from open_agent.trace import Trace
 
 
-class TestQualityScorerDeprecated:
-    def test_docstring_contains_deprecated(self):
-        assert "deprecated" in QualityScorer.__doc__.lower()
+class TestQualityScorer:
+    def test_docstring_describes_purpose(self):
+        assert "quality" in QualityScorer.__doc__.lower()
 
     def test_score_still_works(self):
         scorer = QualityScorer()

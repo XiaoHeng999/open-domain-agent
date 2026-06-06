@@ -21,7 +21,7 @@ from open_agent.memory.runtime import RuntimeMemory
 from open_agent.memory.profile import ProfileMemory
 from open_agent.memory.retrieval import RetrievalMemory
 from open_agent.memory.archive import ArchiveMemory
-from open_agent.tools.todo import TodoManager, TODO_TOOL_SCHEMA
+from open_agent.tools.todo import TodoManager
 from open_agent.skills.registry import SkillRegistry, scan_builtin_skills, scan_workspace_skills
 from open_agent.skills.matcher import SkillMatcher
 from open_agent.safety import SafetyManager
@@ -487,9 +487,9 @@ class AgentRuntime(BaseComponent):
         if routing_decision.intent.missing_slots and routing_decision.complexity.complexity != "simple":
             slot_list = ", ".join(routing_decision.intent.missing_slots)
             self.react_loop._missing_slots_hint = (
-                f"路由层检测到以下参数可能缺失: {slot_list}。"
-                "如果可以通过工具或常识合理推断，请直接执行任务。"
-                "如果确实无法推断，请向用户追问。"
+                f"The routing layer detected these parameters may be missing: {slot_list}. "
+                "If they can be reasonably inferred via tools or common sense, proceed directly. "
+                "If they truly cannot be inferred, ask the user for clarification."
             )
         else:
             self.react_loop._missing_slots_hint = ""

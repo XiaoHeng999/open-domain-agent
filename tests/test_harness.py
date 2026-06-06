@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from open_agent.base import BaseComponent, LifecycleState, MemoryManager, Router
+from open_agent.base import BaseComponent, LifecycleState, MemoryManager
 from open_agent.config import AgentConfig, load_config
 from open_agent.decorators import tool_schema
 from open_agent.errors import AgentError, ToolError, SSRFError
